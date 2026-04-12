@@ -18,6 +18,7 @@
 - [ttl](#ttl)
 - [webhook](#webhook)
 - [celery](#celery)
+- [auth](#auth)
 - [完整示例](#完整示例)
 - [快速参照表](#快速参照表)
 
@@ -221,6 +222,29 @@ webhook_queue   = "webhook_delivery"
 
 ---
 
+## [auth]
+
+API 鉴权配置（可选）。
+
+| Key | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `bearer_token` | string | `""` | API Bearer Token。为空表示不启用鉴权；非空时要求客户端携带 Bearer Token 访问 `/api/v1/*`，WebSocket 端点也会校验 |
+
+**环境变量：**
+
+```
+ORCHESTRATOR__AUTH__BEARER_TOKEN=replace-with-strong-token
+```
+
+```toml
+[auth]
+bearer_token = ""
+```
+
+> WebSocket 浏览器客户端通常无法设置自定义 `Authorization` header，可通过查询参数传递：`?token=<token>`。
+
+---
+
 ## 完整示例
 
 ### 本地开发（docker-compose）
@@ -257,6 +281,9 @@ timeout_ms   = 3000
 broker_url      = "redis://redis:6379/2"
 result_backend  = "redis://redis:6379/2"
 webhook_queue   = "webhook_delivery"
+
+[auth]
+bearer_token = ""
 ```
 
 ### 生产环境（Kubernetes in-cluster）
@@ -296,6 +323,9 @@ timeout_ms   = 1000
 broker_url      = "redis://:password@redis.litterbox.svc.cluster.local:6379/2"
 result_backend  = "redis://:password@redis.litterbox.svc.cluster.local:6379/2"
 webhook_queue   = "webhook_delivery"
+
+[auth]
+bearer_token = "replace-with-strong-token"
 ```
 
 ---
@@ -325,3 +355,4 @@ webhook_queue   = "webhook_delivery"
 | `ORCHESTRATOR__CELERY__BROKER_URL` | `celery.broker_url` | `redis://127.0.0.1:6379/2` |
 | `ORCHESTRATOR__CELERY__RESULT_BACKEND` | `celery.result_backend` | `redis://127.0.0.1:6379/2` |
 | `ORCHESTRATOR__CELERY__WEBHOOK_QUEUE` | `celery.webhook_queue` | `webhook_delivery` |
+| `ORCHESTRATOR__AUTH__BEARER_TOKEN` | `auth.bearer_token` | `""` |

@@ -25,13 +25,28 @@ import type {
 } from '@/types/sandbox';
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080';
+const BEARER_TOKEN = (import.meta.env.VITE_API_BEARER_TOKEN as string || '').trim();
 const API_PREFIX = '/api/v1';
 
 class ApiClient {
   private baseURL: string;
+  private bearerToken: string;
 
-  constructor(baseURL: string) {
+  constructor(baseURL: string, bearerToken: string) {
     this.baseURL = baseURL;
+    this.bearerToken = bearerToken;
+  }
+
+  buildWebSocketUrl(endpoint: string): string {
+    const base = new URL(this.baseURL);
+    const wsBase = `${base.protocol === 'https:' ? 'wss:' : 'ws:'}//${base.host}`;
+    const url = new URL(endpoint, wsBase);
+
+    if (this.bearerToken) {
+      url.searchParams.set('token', this.bearerToken);
+    }
+
+    return url.toString();
   }
 
   private async request<T>(
@@ -39,10 +54,15 @@ class ApiClient {
     options: RequestInit = {}
   ): Promise<T> {
     const url = `${this.baseURL}${endpoint}`;
-    const headers: HeadersInit = {
-      'Content-Type': 'application/json',
-      ...options.headers,
-    };
+    const headers = new Headers(options.headers ?? {});
+
+    if (!headers.has('Content-Type')) {
+      headers.set('Content-Type', 'application/json');
+    }
+
+    if (this.bearerToken) {
+      headers.set('Authorization', `Bearer ${this.bearerToken}`);
+    }
 
     const response = await fetch(url, {
       ...options,
@@ -319,4 +339,4 @@ class ApiClient {
   }
 }
 
-export const apiClient = new ApiClient(BASE_URL);
+export const apiClient = new ApiClient(BASE_URL, BEARER_TOKEN);

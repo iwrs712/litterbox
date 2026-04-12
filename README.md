@@ -141,11 +141,13 @@ curl http://localhost:8080/health
 
 ```bash
 cd dashboard
-cp .env.example .env      # → set VITE_API_BASE_URL=http://localhost:8080
+cp .env.example .env      # → set VITE_API_BASE_URL and VITE_API_BEARER_TOKEN
 npm install && npm run dev
 ```
 
 Open **http://localhost:5173**
+
+> **Auth:** If the backend has `ORCHESTRATOR__AUTH__BEARER_TOKEN` set, add the same value to `VITE_API_BEARER_TOKEN` in `dashboard/.env`. Leave it empty for open access.
 
 ### 3. Create Your First Sandbox
 
@@ -210,6 +212,7 @@ Backend is configured via `config.toml` with environment variable overrides (`OR
 | `ORCHESTRATOR__SANDBOX__MAX_SANDBOXES` | `1000` | Max concurrent sandboxes |
 | `ORCHESTRATOR__TTL__DEFAULT_TTL_SECONDS` | `1800` | Default sandbox lifetime (seconds) |
 | `ORCHESTRATOR__CELERY__BROKER_URL` | `redis://127.0.0.1:6379/2` | Celery broker Redis URL |
+| `ORCHESTRATOR__AUTH__BEARER_TOKEN` | *empty* | Optional shared Bearer token for `/api/v1/*` HTTP requests and dashboard websocket API access |
 
 > 📖 **Full configuration reference** → [docs/configuration.md](docs/configuration.md)
 

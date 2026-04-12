@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
@@ -64,10 +64,7 @@ export function Terminal({ sandboxId }: TerminalProps) {
 
     setTimeout(() => fit(), 0);
 
-    const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080';
-    const url = new URL(baseUrl);
-    const wsProtocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${wsProtocol}//${url.host}/api/v1/sandboxes/${sandboxId}/terminal`;
+    const wsUrl = apiClient.buildWebSocketUrl(`/api/v1/sandboxes/${sandboxId}/terminal`);
 
     let renewInterval: number | undefined;
 
