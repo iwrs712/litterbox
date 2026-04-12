@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <linearGradient id="catGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#fbbf24;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#f59e0b;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+
+  <!-- Cat face -->
+  <circle cx="50" cy="55" r="35" fill="url(#catGradient)"/>
+
+  <!-- Left ear -->
+  <path d="M 25 30 L 15 10 L 35 25 Z" fill="url(#catGradient)"/>
+
+  <!-- Right ear -->
+  <path d="M 75 30 L 85 10 L 65 25 Z" fill="url(#catGradient)"/>
+
+  <!-- Inner ears -->
+  <path d="M 25 28 L 20 15 L 30 25 Z" fill="#fef3c7"/>
+  <path d="M 75 28 L 80 15 L 70 25 Z" fill="#fef3c7"/>
+
+  <!-- Left eye -->
+  <ellipse cx="38" cy="50" rx="6" ry="8" fill="#1f2937"/>
+  <ellipse cx="39" cy="48" rx="2" ry="3" fill="#ffffff"/>
+
+  <!-- Right eye -->
+  <ellipse cx="62" cy="50" rx="6" ry="8" fill="#1f2937"/>
+  <ellipse cx="63" cy="48" rx="2" ry="3" fill="#ffffff"/>
+
+  <!-- Nose -->
+  <path d="M 50 58 L 47 62 L 53 62 Z" fill="#ec4899"/>
+
+  <!-- Mouth -->
+  <path d="M 50 62 Q 45 66 42 64" stroke="#1f2937" stroke-width="2" fill="none" stroke-linecap="round"/>
+  <path d="M 50 62 Q 55 66 58 64" stroke="#1f2937" stroke-width="2" fill="none" stroke-linecap="round"/>
+
+  <!-- Whiskers left -->
+  <line x1="20" y1="55" x2="35" y2="54" stroke="#1f2937" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="20" y1="60" x2="35" y2="58" stroke="#1f2937" stroke-width="1.5" stroke-linecap="round"/>
+
+  <!-- Whiskers right -->
+  <line x1="80" y1="55" x2="65" y2="54" stroke="#1f2937" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="80" y1="60" x2="65" y2="58" stroke="#1f2937" stroke-width="1.5" stroke-linecap="round"/>
+</svg>
