@@ -210,6 +210,7 @@ Backend is configured via `config.toml` with environment variable overrides (`OR
 | `ORCHESTRATOR__SANDBOX__MAX_SANDBOXES` | `1000` | Max concurrent sandboxes |
 | `ORCHESTRATOR__TTL__DEFAULT_TTL_SECONDS` | `1800` | Default sandbox lifetime (seconds) |
 | `ORCHESTRATOR__CELERY__BROKER_URL` | `redis://127.0.0.1:6379/2` | Celery broker Redis URL |
+| `ORCHESTRATOR__AUTH__BEARER_TOKEN` | *empty* | Optional shared Bearer token for `/api/v1/*` HTTP requests and dashboard websocket API access |
 
 > 📖 **Full configuration reference** → [docs/configuration.md](docs/configuration.md)
 

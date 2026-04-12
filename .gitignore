@@ -1,0 +1,85 @@
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.venv/
+venv/
+env/
+pip-wheel-metadata/
+*.pyo
+.mypy_cache/
+.ruff_cache/
+.pytype/
+.dmypy.json
+
+# ── Node / Frontend ───────────────────────────────────────────────────────────
+node_modules/
+dist/
+.next/
+.nuxt/
+.output/
+.cache/
+*.tsbuildinfo
+
+# ── Environment & Secrets ─────────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+*.yaml.secret
+*secret*
+# Kubernetes credentials – never commit cluster configs
+k3s*.yaml
+k8s*.yaml
+kubeconfig*
+
+# ── Test / CI artifacts ───────────────────────────────────────────────────────
+.pytest_cache/
+.pytest-celery/
+.coverage
+coverage.xml
+htmlcov/
+*.log
+celerybeat-schedule.db
+.celery/
+
+# ── Build & Packaging ─────────────────────────────────────────────────────────
+*.tar.gz
+*.zip
+*.whl
+
+# ── Editor & OS ───────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ── Repo-specific exclusions ─────────────────────────────────────────────────
+# Old architecture docs at repo root (kept locally, not published)
+ARCHITECTURE_DIAGRAMS.md
+ARCHITECTURE_SUMMARY.md
+SYSTEM_ARCHITECTURE.md
+THREAD_HANDOFF.md
+# Legacy config files at repo root
+config.toml
+configuration.toml
+configuration-fc.toml
+# Other projects / archives
+litterbox-saas/
+litterbox-kata.zip
+front/
+# Craft Agent / IDE tool dirs
+.omx/
+.baidu-cc/
+.comate/
+
+# ── Prometheus / observability ────────────────────────────────────────────────
+*.db
