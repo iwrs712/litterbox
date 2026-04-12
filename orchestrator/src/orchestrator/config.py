@@ -47,6 +47,10 @@ class CeleryConfig(BaseModel):
     webhook_queue: str = "webhook_delivery"
 
 
+class AuthConfig(BaseModel):
+    bearer_token: str = ""
+
+
 class Settings(BaseModel):
     server: ServerConfig = Field(default_factory=ServerConfig)
     kubernetes: KubernetesConfig = Field(default_factory=KubernetesConfig)
@@ -54,6 +58,7 @@ class Settings(BaseModel):
     ttl: TTLConfig = Field(default_factory=TTLConfig)
     webhook: WebhookConfig = Field(default_factory=WebhookConfig)
     celery: CeleryConfig = Field(default_factory=CeleryConfig)
+    auth: AuthConfig = Field(default_factory=AuthConfig)
 
 
 ENV_PREFIX = "ORCHESTRATOR__"
