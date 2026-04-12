@@ -29,9 +29,26 @@ const API_PREFIX = '/api/v1';
 
 class ApiClient {
   private baseURL: string;
+  private bearerToken = '';
 
   constructor(baseURL: string) {
     this.baseURL = baseURL;
+  }
+
+  setBearerToken(token: string) {
+    this.bearerToken = token.trim();
+  }
+
+  buildWebSocketUrl(endpoint: string): string {
+    const base = new URL(this.baseURL);
+    const wsBase = `${base.protocol === 'https:' ? 'wss:' : 'ws:'}//${base.host}`;
+    const url = new URL(endpoint, wsBase);
+
+    if (this.bearerToken) {
+      url.searchParams.set('token', this.bearerToken);
+    }
+
+    return url.toString();
   }
 
   private async request<T>(
@@ -39,10 +56,15 @@ class ApiClient {
     options: RequestInit = {}
   ): Promise<T> {
     const url = `${this.baseURL}${endpoint}`;
-    const headers: HeadersInit = {
-      'Content-Type': 'application/json',
-      ...options.headers,
-    };
+    const headers = new Headers(options.headers ?? {});
+
+    if (!headers.has('Content-Type')) {
+      headers.set('Content-Type', 'application/json');
+    }
+
+    if (this.bearerToken) {
+      headers.set('Authorization', `Bearer ${this.bearerToken}`);
+    }
 
     const response = await fetch(url, {
       ...options,

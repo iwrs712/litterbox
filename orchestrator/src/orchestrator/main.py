@@ -6,10 +6,11 @@ from contextlib import asynccontextmanager, suppress
 import json
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 
+from orchestrator.auth import is_http_authorized, is_websocket_authorized, normalize_configured_token
 from orchestrator.container import Container, build_container
 from orchestrator.domain.models import (
     AllocateSandboxRequest,
@@ -34,6 +35,7 @@ from orchestrator.utils import validate_metadata_key
 
 
 logger = logging.getLogger(__name__)
+API_PREFIX = "/api/v1"
 
 
 def ok(*, data=None, message: str | None = None, status_code: int = 200) -> JSONResponse:
@@ -93,6 +95,26 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def enforce_bearer_auth(request: Request, call_next):
+    if not request.url.path.startswith(API_PREFIX):
+        return await call_next(request)
+    if request.method == "OPTIONS":
+        return await call_next(request)
+    container: Container | None = getattr(app.state, "container", None)
+    expected_token = ""
+    if container is not None:
+        expected_token = normalize_configured_token(container.settings.auth.bearer_token)
+    if is_http_authorized(expected_token, request.headers.get("Authorization")):
+        return await call_next(request)
+    return JSONResponse(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        headers={"WWW-Authenticate": "Bearer"},
+        content=ApiResponse(success=False, error="Unauthorized").model_dump(mode="json", exclude_none=True),
+    )
+
 
 # Prometheus /metrics 端点（供 Prometheus scrape 使用）
 from prometheus_client import make_asgi_app as _make_metrics_app  # noqa: E402
@@ -596,10 +618,25 @@ def get_metrics_snapshot(container: Annotated[Container, Depends(get_container)]
         return error(str(exc), 500)
 
 
+async def require_websocket_auth(websocket: WebSocket, container: Container) -> bool:
+    expected_token = normalize_configured_token(container.settings.auth.bearer_token)
+    authorized = is_websocket_authorized(
+        expected_token,
+        websocket.headers.get("authorization"),
+        websocket.query_params.get("token"),
+    )
+    if authorized:
+        return True
+    await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="unauthorized")
+    return False
+
+
 @app.websocket("/api/v1/sandboxes/{sandbox_id}/terminal")
 async def terminal(websocket: WebSocket, sandbox_id: str) -> None:
-    await websocket.accept()
     container: Container = app.state.container
+    if not await require_websocket_auth(websocket, container):
+        return
+    await websocket.accept()
     try:
         session = container.gateway.open_shell(sandbox_id)
     except Exception:  # noqa: BLE001
@@ -664,8 +701,10 @@ async def terminal(websocket: WebSocket, sandbox_id: str) -> None:
 
 @app.websocket("/api/v1/sandboxes/{sandbox_id}/acp")
 async def acp(websocket: WebSocket, sandbox_id: str) -> None:
-    await websocket.accept()
     container: Container = app.state.container
+    if not await require_websocket_auth(websocket, container):
+        return
+    await websocket.accept()
     try:
         session = container.gateway.open_acp(sandbox_id)
     except Exception:  # noqa: BLE001

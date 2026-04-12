@@ -121,6 +121,7 @@ KUBECONFIG=~/.kube/config
 K8S_NAMESPACE=default
 API_PORT=8080
 BASE_DOMAIN=localhost
+API_BEARER_TOKEN=
 ```
 
 ### 2. Start the stack
@@ -233,6 +234,7 @@ Examples:
 export ORCHESTRATOR__KUBERNETES__NAMESPACE=default
 export ORCHESTRATOR__CELERY__BROKER_URL=redis://127.0.0.1:6379/2
 export ORCHESTRATOR__SANDBOX__BASE_DOMAIN=localhost
+export ORCHESTRATOR__AUTH__BEARER_TOKEN=replace-with-strong-token
 ```
 
 Config groups:
@@ -243,6 +245,7 @@ Config groups:
 - `ttl`
 - `webhook`
 - `celery`
+- `auth`
 
 Notable fields in the default config:
 
@@ -253,6 +256,21 @@ Notable fields in the default config:
 - `sandbox.base_domain`
 - `ttl.default_ttl_seconds`
 - `celery.broker_url`
+- `auth.bearer_token`
+
+## API Bearer Auth (Optional)
+
+Set `ORCHESTRATOR__AUTH__BEARER_TOKEN` (or `auth.bearer_token` in `config.toml`) to enable API auth.
+
+- If token is empty, API behavior stays open (backward-compatible default).
+- If token is set, all `/api/v1/*` HTTP routes require `Authorization: Bearer <token>`.
+- WebSocket endpoints (`/api/v1/sandboxes/{sandbox_id}/terminal` and `/api/v1/sandboxes/{sandbox_id}/acp`) require the same token.
+
+For browser WebSocket clients that cannot set custom auth headers, pass token in query:
+
+```text
+ws://host/api/v1/sandboxes/<id>/terminal?token=<token>
+```
 
 ## API Surface
 
