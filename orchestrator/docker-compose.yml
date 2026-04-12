@@ -1,0 +1,90 @@
+# 本地一键启动：docker compose up
+#
+# 启动三个服务：
+#   redis   — Celery broker + TTL 队列
+#   api     — FastAPI / uvicorn，监听 :8080
+#   worker  — Celery worker（pool_reconcile + webhook_delivery）+ TTL 扫描子进程
+#
+# 前提：
+#   - 本地有 kubeconfig，默认读 ~/.kube/config
+#   - 也可在项目根新建 .env 文件覆盖变量，例如：
+#       KUBECONFIG=/path/to/k3s.yaml
+#       K8S_NAMESPACE=default
+#       BASE_DOMAIN=localhost
+#       API_PORT=8080
+
+# 公共环境变量
+x-env: &env
+  ORCHESTRATOR__KUBERNETES__KUBECONFIG: /root/.kube/config
+  ORCHESTRATOR__KUBERNETES__NAMESPACE: ${K8S_NAMESPACE:-default}
+  ORCHESTRATOR__CELERY__BROKER_URL: redis://redis:6379/2
+  ORCHESTRATOR__CELERY__RESULT_BACKEND: redis://redis:6379/2
+  ORCHESTRATOR__SANDBOX__BASE_DOMAIN: ${BASE_DOMAIN:-localhost}
+  PYTHONUNBUFFERED: "1"
+
+# 公共挂载（kubeconfig）
+x-volumes: &volumes
+  - ${KUBECONFIG:-~/.kube/config}:/root/.kube/config:ro
+
+# 公共构建配置
+x-build: &build
+  context: .
+  dockerfile: Dockerfile
+
+services:
+
+  # ── Redis ────────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7.2-alpine
+    command: redis-server --appendonly yes --maxmemory-policy noeviction
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # ── API ──────────────────────────────────────────────────────────────────────
+  api:
+    build: *build
+    environment:
+      <<: *env
+      ORCHESTRATOR_ROLE: api
+    volumes: *volumes
+    ports:
+      - "${API_PORT:-8080}:8080"
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import sys, urllib.request; resp = urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=2); sys.exit(0 if 200 <= resp.status < 400 else 1)",
+        ]
+      interval: 10s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
+    restart: unless-stopped
+
+  # ── Worker（Celery + TTL 子进程）────────────────────────────────────────────
+  worker:
+    build: *build
+    environment:
+      <<: *env
+      ORCHESTRATOR_ROLE: worker
+    volumes: *volumes
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  redis-data:
