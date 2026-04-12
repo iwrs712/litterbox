@@ -3,7 +3,6 @@ import { cn } from '@/lib/utils';
 import { LayoutDashboard, Server, Cat, FileCode, Database, Webhook } from 'lucide-react';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { LanguageToggle } from '@/components/LanguageToggle';
-import { ApiTokenSettings } from '@/components/ApiTokenSettings';
 import { useApp } from '@/contexts/AppContext';
 
 interface LayoutProps {
@@ -58,7 +57,6 @@ export function Layout({ children }: LayoutProps) {
             })}
           </nav>
           <div className="flex items-center space-x-2 ml-auto">
-            <ApiTokenSettings />
             <LanguageToggle />
             <ThemeToggle />
           </div>

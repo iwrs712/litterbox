@@ -25,18 +25,16 @@ import type {
 } from '@/types/sandbox';
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080';
+const BEARER_TOKEN = (import.meta.env.VITE_API_BEARER_TOKEN as string || '').trim();
 const API_PREFIX = '/api/v1';
 
 class ApiClient {
   private baseURL: string;
-  private bearerToken = '';
+  private bearerToken: string;
 
-  constructor(baseURL: string) {
+  constructor(baseURL: string, bearerToken: string) {
     this.baseURL = baseURL;
-  }
-
-  setBearerToken(token: string) {
-    this.bearerToken = token.trim();
+    this.bearerToken = bearerToken;
   }
 
   buildWebSocketUrl(endpoint: string): string {
@@ -341,4 +339,4 @@ class ApiClient {
   }
 }
 
-export const apiClient = new ApiClient(BASE_URL);
+export const apiClient = new ApiClient(BASE_URL, BEARER_TOKEN);
