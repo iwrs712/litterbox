@@ -141,11 +141,13 @@ curl http://localhost:8080/health
 
 ```bash
 cd dashboard
-cp .env.example .env      # → set VITE_API_BASE_URL=http://localhost:8080
+cp .env.example .env      # → set VITE_API_BASE_URL and VITE_API_BEARER_TOKEN
 npm install && npm run dev
 ```
 
 Open **http://localhost:5173**
+
+> **Auth:** If the backend has `ORCHESTRATOR__AUTH__BEARER_TOKEN` set, add the same value to `VITE_API_BEARER_TOKEN` in `dashboard/.env`. Leave it empty for open access.
 
 ### 3. Create Your First Sandbox
 

@@ -11,7 +11,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 COPY pyproject.toml ./
-COPY README.md ./
 RUN python - <<'PY' > /tmp/requirements.txt
 from pathlib import Path
 import tomllib

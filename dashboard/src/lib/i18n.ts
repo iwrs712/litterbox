@@ -36,17 +36,6 @@ export interface Translations {
     title: string;
     subtitle: string;
   };
-  auth: {
-    openButton: string;
-    dialogTitle: string;
-    dialogDescription: string;
-    tokenLabel: string;
-    tokenPlaceholder: string;
-    configured: string;
-    notConfigured: string;
-    saveToken: string;
-    clearToken: string;
-  };
   footer: {
     poweredBy: string;
     copyright: string;
@@ -408,17 +397,6 @@ const en: Translations = {
     title: 'Litterbox',
     subtitle: 'Sandbox Orchestration Platform',
   },
-  auth: {
-    openButton: 'API token settings',
-    dialogTitle: 'API Bearer Token',
-    dialogDescription: 'Configure the token used in dashboard API and terminal requests.',
-    tokenLabel: 'Bearer Token',
-    tokenPlaceholder: 'Paste API bearer token',
-    configured: 'Token configured',
-    notConfigured: 'No token configured',
-    saveToken: 'Save Token',
-    clearToken: 'Clear Token',
-  },
   footer: {
     poweredBy: 'Powered by Litterbox',
     copyright: '© 2026 Litterbox. All rights reserved.',
@@ -779,17 +757,6 @@ const zh: Translations = {
   header: {
     title: 'Litterbox',
     subtitle: '沙盒编排平台',
-  },
-  auth: {
-    openButton: 'API 令牌设置',
-    dialogTitle: 'API Bearer 令牌',
-    dialogDescription: '配置 Dashboard 调用 API 与终端连接时使用的令牌。',
-    tokenLabel: 'Bearer 令牌',
-    tokenPlaceholder: '粘贴 API Bearer 令牌',
-    configured: '已配置令牌',
-    notConfigured: '未配置令牌',
-    saveToken: '保存令牌',
-    clearToken: '清除令牌',
   },
   footer: {
     poweredBy: 'Powered by Litterbox',
