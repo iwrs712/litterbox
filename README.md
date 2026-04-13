@@ -73,44 +73,66 @@ POST /api/v1/sandboxes  →  running sandbox in < 200ms (warm pool)
 
 ## Architecture
 
-```
-                  ┌──────────┐         ┌──────────────────────────────────────┐
-                  │Dashboard │  REST   │          Orchestrator API            │
-                  │ (React)  ├────────▶│  FastAPI · uvicorn · WebSocket       │
-                  └──────────┘   WS    │                                      │
-                                       │  /templates  /sandboxes  /pools      │
-  ┌──────────┐                         │  /webhooks   /exposes    /terminal   │
-  │ External ├────────────────────────▶│                                      │
-  └──────────┘          HTTP           └─────────────┬────────────────────────┘
-                                                     │  K8s API
-                                                     │  kubectl exec
-       ┌─────────────────────────────────────────────┼──────────────────────┐
-       │                                             ▼                      │
-       │     ┌───────────┐  ┌───────────┐  ┌──────────────┐  ┌──────────┐  │
-       │     │ Deployment│  │  Service   │  │   Ingress    │  │ConfigMap │  │
-       │     │ (sandbox) │  │ (NodePort) │  │ (HTTP expose)│  │ (storage)│  │
-       │     └───────────┘  └───────────┘  └──────────────┘  └──────────┘  │
-       │                                                                    │
-       │                        Kubernetes  Cluster                         │
-       └─────────────────────────────────────────────▲──────────────────────┘
-                                                     │
-       ┌─────────────────────────────────────────────┴──────────────────────┐
-       │                      Orchestrator Worker                           │
-       │                                                                    │
-       │    ┌──────────────┐  ┌──────────────┐  ┌────────────────────┐     │
-       │    │Pool Reconcile│  │   Webhook    │  │    TTL Cleaner     │     │
-       │    │  (Celery)    │  │   Delivery   │  │   (subprocess)     │     │
-       │    └──────┬───────┘  └──────┬───────┘  └─────────┬──────────┘     │
-       │           └─────────────────┴────────────────────┘                 │
-       └─────────────────────────────────────┬──────────────────────────────┘
-                                             │
-                                      ┌──────┴──────┐
-                                      │    Redis     │
-                                      │              │
-                                      │  Task Broker │
-                                      │  TTL Sorted  │
-                                      │  Set · Locks │
-                                      └─────────────┘
+```mermaid
+graph TB
+    subgraph Clients["Clients"]
+        Dashboard["Dashboard\n(React)"]
+        External["External API\nClients"]
+    end
+
+    subgraph OrchestratorAPI["Orchestrator API  (FastAPI · uvicorn)"]
+        API["REST /api/v1/*\n/templates  /sandboxes\n/pools  /webhooks\n/exposes  /metrics"]
+        WS["WebSocket\n/terminal  /acp"]
+        Auth["Bearer Token\nMiddleware"]
+    end
+
+    subgraph OrchestratorWorker["Orchestrator Worker  (Celery)"]
+        Pool["Pool\nReconciler"]
+        Webhook["Webhook\nDelivery"]
+        TTL["TTL\nCleaner"]
+    end
+
+    Redis[("Redis\nTask Broker\nTTL Sorted Set\nLocks")]
+
+    subgraph K8sCluster["Kubernetes Cluster"]
+        RuntimeClass["RuntimeClass\nkata-cloud-hypervisor"]
+
+        subgraph SandboxPod1["Sandbox Pod  (runtimeClassName: kata)"]
+            VM1["🔒 Lightweight VM\n(cloud-hypervisor)"]
+            Container1["Container\nProcess"]
+            VM1 --> Container1
+        end
+
+        subgraph SandboxPod2["Sandbox Pod  (runtimeClassName: kata)"]
+            VM2["🔒 Lightweight VM\n(cloud-hypervisor)"]
+            Container2["Container\nProcess"]
+            VM2 --> Container2
+        end
+
+        Svc["Service\n(NodePort)"]
+        Ingress["Ingress\n(HTTP expose)"]
+        ConfigMap["ConfigMap\n(storage)"]
+        RuntimeClass -.->|"enforces VM isolation"| SandboxPod1
+        RuntimeClass -.->|"enforces VM isolation"| SandboxPod2
+    end
+
+    Dashboard -->|"REST + WS\n+ Bearer Token"| Auth
+    External -->|"REST\n+ Bearer Token"| Auth
+    Auth --> API
+    Auth --> WS
+
+    API -->|"K8s API"| K8sCluster
+    WS -->|"kubectl exec\n(terminal/acp)"| SandboxPod1
+
+    Pool -->|"K8s API"| K8sCluster
+    TTL -->|"K8s API"| K8sCluster
+
+    OrchestratorAPI <-->|"Task Queue"| Redis
+    OrchestratorWorker <-->|"Task Queue"| Redis
+
+    Svc --> SandboxPod1
+    Svc --> SandboxPod2
+    Ingress --> Svc
 ```
 
 ### Prerequisites
