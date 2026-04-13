@@ -73,43 +73,66 @@ POST /api/v1/sandboxes  →  < 200ms 拿到运行中的沙箱（预热池）
 
 ##  架构
 
-```
-                  ┌──────────┐         ┌──────────────────────────────────────┐
-                  │Dashboard │  REST   │          Orchestrator API            │
-                  │ (React)  ├────────▶│  FastAPI · uvicorn · WebSocket       │
-                  └──────────┘   WS    │                                      │
-                                       │  /templates  /sandboxes  /pools      │
-  ┌──────────┐                         │  /webhooks   /exposes    /terminal   │
-  │ 外部调用  ├────────────────────────▶│                                      │
-  └──────────┘          HTTP           └─────────────┬────────────────────────┘
-                                                     │  K8s API
-                                                     │  kubectl exec
-       ┌─────────────────────────────────────────────┼──────────────────────┐
-       │                                             ▼                      │
-       │     ┌───────────┐  ┌───────────┐  ┌──────────────┐  ┌──────────┐  │
-       │     │ Deployment│  │  Service   │  │   Ingress    │  │ConfigMap │  │
-       │     │  (沙箱)   │  │ (NodePort) │  │ (HTTP 暴露)  │  │ (持久化) │  │
-       │     └───────────┘  └───────────┘  └──────────────┘  └──────────┘  │
-       │                                                                    │
-       │                         Kubernetes  集群                           │
-       └─────────────────────────────────────────────▲──────────────────────┘
-                                                     │
-       ┌─────────────────────────────────────────────┴──────────────────────┐
-       │                      Orchestrator Worker                           │
-       │                                                                    │
-       │    ┌──────────────┐  ┌──────────────┐  ┌────────────────────┐     │
-       │    │  池补水       │  │ Webhook 投递  │  │  TTL Cleaner       │     │
-       │    └──────┬───────┘  └──────┬───────┘  └─────────┬──────────┘     │
-       │           └─────────────────┴────────────────────┘                 │
-       └─────────────────────────────────────┬──────────────────────────────┘
-                                             │
-                                      ┌──────┴──────┐
-                                      │    Redis     │
-                                      │              │
-                                      │  Task Broker │
-                                      │  TTL 有序集合 │
-                                      │  分布式锁     │
-                                      └─────────────┘
+```mermaid
+graph TB
+    subgraph Clients["客户端"]
+        Dashboard["Dashboard\n(React)"]
+        External["外部 API\n调用方"]
+    end
+
+    subgraph OrchestratorAPI["Orchestrator API  (FastAPI · uvicorn)"]
+        API["REST /api/v1/*\n/templates  /sandboxes\n/pools  /webhooks\n/exposes  /metrics"]
+        WS["WebSocket\n/terminal  /acp"]
+        Auth["Bearer Token\n鉴权中间件"]
+    end
+
+    subgraph OrchestratorWorker["Orchestrator Worker  (Celery)"]
+        Pool["池补水\n(Reconciler)"]
+        Webhook["Webhook\n投递"]
+        TTL["TTL\n清理器"]
+    end
+
+    Redis[("Redis\nTask Broker\nTTL 有序集合\n分布式锁")]
+
+    subgraph K8sCluster["Kubernetes 集群"]
+        RuntimeClass["RuntimeClass\nkata-cloud-hypervisor"]
+
+        subgraph SandboxPod1["沙箱 Pod  (runtimeClassName: kata)"]
+            VM1["🔒 轻量级虚拟机\n(cloud-hypervisor)"]
+            Container1["容器进程"]
+            VM1 --> Container1
+        end
+
+        subgraph SandboxPod2["沙箱 Pod  (runtimeClassName: kata)"]
+            VM2["🔒 轻量级虚拟机\n(cloud-hypervisor)"]
+            Container2["容器进程"]
+            VM2 --> Container2
+        end
+
+        Svc["Service\n(NodePort)"]
+        Ingress["Ingress\n(HTTP 暴露)"]
+        ConfigMap["ConfigMap\n(持久化)"]
+        RuntimeClass -.->|"强制 VM 级隔离"| SandboxPod1
+        RuntimeClass -.->|"强制 VM 级隔离"| SandboxPod2
+    end
+
+    Dashboard -->|"REST + WS\n+ Bearer Token"| Auth
+    External -->|"REST\n+ Bearer Token"| Auth
+    Auth --> API
+    Auth --> WS
+
+    API -->|"K8s API"| K8sCluster
+    WS -->|"kubectl exec\n(terminal/acp)"| SandboxPod1
+
+    Pool -->|"K8s API"| K8sCluster
+    TTL -->|"K8s API"| K8sCluster
+
+    OrchestratorAPI <-->|"任务队列"| Redis
+    OrchestratorWorker <-->|"任务队列"| Redis
+
+    Svc --> SandboxPod1
+    Svc --> SandboxPod2
+    Ingress --> Svc
 ```
 
 ### 前置条件
@@ -140,11 +163,13 @@ curl http://localhost:8080/health
 
 ```bash
 cd dashboard
-cp .env.example .env      # → 设置 VITE_API_BASE_URL=http://localhost:8080
+cp .env.example .env      # → 设置 VITE_API_BASE_URL 和 VITE_API_BEARER_TOKEN
 npm install && npm run dev
 ```
 
 访问 **http://localhost:5173**
+
+> **鉴权：** 若后端配置了 `ORCHESTRATOR__AUTH__BEARER_TOKEN`，需在 `dashboard/.env` 中将 `VITE_API_BEARER_TOKEN` 设为相同的值。留空则不启用鉴权。
 
 ### 3️⃣ 创建第一个沙箱
 
