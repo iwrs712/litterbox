@@ -15,7 +15,7 @@ from orchestrator.domain.models import (
     QueryOptions,
     UpdateSandboxRequest,
 )
-from orchestrator.responses import error, ok, parse_timeout
+from orchestrator.responses import error, ok
 from orchestrator.utils import validate_metadata_key
 
 router = APIRouter(prefix="/api/v1/sandboxes", tags=["sandboxes"])
@@ -113,44 +113,6 @@ def delete_sandbox(
     try:
         container.pool_service.release_sandbox(sandbox_id)
         return ok(message="Sandbox deleted successfully")
-    except Exception as exc:  # noqa: BLE001
-        return error(str(exc), 500)
-
-
-@router.post("/{sandbox_id}/start")
-def start_sandbox(
-    sandbox_id: str,
-    container: Annotated[Container, Depends(get_container)],
-) -> JSONResponse:
-    try:
-        container.sandbox_service.start_sandbox(sandbox_id)
-        return ok(message="Sandbox started successfully")
-    except Exception as exc:  # noqa: BLE001
-        return error(str(exc), 500)
-
-
-@router.post("/{sandbox_id}/stop")
-def stop_sandbox(
-    sandbox_id: str,
-    timeout: str | None = None,
-    container: Annotated[Container, Depends(get_container)] = None,
-) -> JSONResponse:
-    try:
-        container.sandbox_service.stop_sandbox(sandbox_id, grace_period_seconds=parse_timeout(timeout))
-        return ok(message="Sandbox stopped successfully")
-    except Exception as exc:  # noqa: BLE001
-        return error(str(exc), 500)
-
-
-@router.post("/{sandbox_id}/restart")
-def restart_sandbox(
-    sandbox_id: str,
-    timeout: str | None = None,
-    container: Annotated[Container, Depends(get_container)] = None,
-) -> JSONResponse:
-    try:
-        container.sandbox_service.restart_sandbox(sandbox_id, parse_timeout(timeout))
-        return ok(message="Sandbox restarted successfully")
     except Exception as exc:  # noqa: BLE001
         return error(str(exc), 500)
 

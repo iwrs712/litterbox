@@ -5,29 +5,12 @@ from datetime import UTC, datetime
 import httpx
 
 from orchestrator.config import Settings
-from orchestrator.domain.models import Webhook
+from orchestrator.domain.models import Webhook, WebhookPayload
 from orchestrator.services.webhooks import WebhookService
 
 
-class FakePayload:
-    def model_dump(self, mode: str = "json") -> dict:
-        return {
-            "event_type": "sandbox_ready",
-            "sandbox": {"id": "sbx-1"},
-        }
-
-
 class FakeClient:
-    def __init__(self, *args, **kwargs) -> None:
-        pass
-
-    def __enter__(self) -> "FakeClient":
-        return self
-
-    def __exit__(self, exc_type, exc, tb) -> None:
-        return None
-
-    def post(self, url: str, headers: dict[str, str], json: dict) -> httpx.Response:
+    def post(self, url: str, headers: dict[str, str], json: dict, timeout: float) -> httpx.Response:
         request = httpx.Request("POST", url, headers=headers)
         return httpx.Response(200, request=request, json={"ok": True})
 
@@ -43,11 +26,24 @@ def test_webhook_send_logs_request_and_response(monkeypatch, caplog) -> None:
         created_at=datetime.now(tz=UTC),
         updated_at=datetime.now(tz=UTC),
     )
-
-    monkeypatch.setattr(httpx, "Client", FakeClient)
+    payload = WebhookPayload.model_validate(
+        {
+            "event_id": "evt-1",
+            "event_type": "sandbox_ready",
+            "occurred_at": datetime.now(tz=UTC),
+            "sandbox": {
+                "id": "sbx-1",
+                "status": "running",
+                "pool_state": "none",
+                "created_at": datetime.now(tz=UTC),
+                "updated_at": datetime.now(tz=UTC),
+            },
+        }
+    )
+    service._http = FakeClient()
 
     with caplog.at_level("INFO", logger="orchestrator.services.webhooks"):
-        service._send(webhook, FakePayload())
+        service._send_once(webhook, payload)
 
     assert "sending webhook request webhook_id=wh-1" in caplog.text
     assert "received webhook response webhook_id=wh-1" in caplog.text
