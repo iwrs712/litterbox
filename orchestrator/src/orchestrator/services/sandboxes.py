@@ -58,6 +58,7 @@ class SandboxService:
         template_id: str,
         name: str = "",
         metadata: dict[str, str] | None = None,
+        env: list[str] | None = None,
         pool_state: str = PoolState.NONE,
         wait_ready: bool = True,
         dispatch_events: bool = True,
@@ -73,6 +74,7 @@ class SandboxService:
             template=template,
             metadata=metadata,
             name=name,
+            env=env,
             pool_state=pool_state,
             ttl_seconds=ttl_seconds,
         )
@@ -316,6 +318,7 @@ class SandboxService:
         template: Template,
         metadata: dict[str, str],
         name: str,
+        env: list[str] | None,
         pool_state: str,
         ttl_seconds: int | None,
     ) -> client.V1Deployment:
@@ -347,7 +350,11 @@ class SandboxService:
         if effective_ttl > 0:
             self._set_ttl_annotations(annotations, effective_ttl, ttl_token=short_id("ttl-"))
 
-        env = [client.V1EnvVar(name=key, value=value) for key, value in parse_env_list(template.env)]
+        merged_env_items = [*template.env, *(env or [])]
+        merged_env_map: dict[str, str] = {}
+        for key, value in parse_env_list(merged_env_items):
+            merged_env_map[key] = value
+        container_env = [client.V1EnvVar(name=key, value=value) for key, value in merged_env_map.items()]
         volume_mounts: list[client.V1VolumeMount] = []
         volumes: list[client.V1Volume] = []
         for index, mount in enumerate(template.host_path_mounts):
@@ -401,7 +408,7 @@ class SandboxService:
                     name="main",
                     image=template.image,
                     command=shlex.split(template.command) if template.command else None,
-                    env=env or None,
+                    env=container_env or None,
                     lifecycle=lifecycle,
                     resources=resources,
                     volume_mounts=volume_mounts or None,
