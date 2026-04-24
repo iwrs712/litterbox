@@ -58,6 +58,7 @@ Templates define the resource blueprint for sandboxes (image, CPU, memory, env v
 | `memory_mb` | integer | Memory limit in MB (128–131072) |
 | `memory_request` | integer? | Memory request in MB (default: same as limit) |
 | `ttl_seconds` | integer? | Default sandbox lifetime in seconds (60–86400) |
+| `lifecycle` | TemplateLifecycle? | Container lifecycle hooks applied to every sandbox created from this template |
 | `metadata` | object? | Arbitrary key-value metadata |
 | `created_at` | string | ISO 8601 creation timestamp |
 | `updated_at` | string | ISO 8601 last-updated timestamp |
@@ -69,6 +70,14 @@ Templates define the resource blueprint for sandboxes (image, CPU, memory, env v
 | `host_path` | string | Absolute path on the host node |
 | `container_path` | string | Mount path inside the container |
 | `read_only` | boolean | Whether the mount is read-only |
+
+**TemplateLifecycle object:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `postStart.exec.command` | string[] | Command run by Kubernetes after container creation |
+| `preStop.exec.command` | string[] | Command run by Kubernetes before container termination |
+| `preStop.terminationGracePeriodSeconds` | integer? | Pod termination grace period for sandbox delete/release/TTL cleanup (1–300) |
 
 ---
 
@@ -85,7 +94,16 @@ curl -X POST http://localhost:8080/api/v1/templates \
     "cpu_millicores": 1000,
     "memory_mb": 512,
     "env": ["TERM=xterm-256color", "LANG=en_US.UTF-8"],
-    "ttl_seconds": 3600
+    "ttl_seconds": 3600,
+    "lifecycle": {
+      "postStart": {
+        "exec": { "command": ["/bin/sh", "-lc", "echo started"] }
+      },
+      "preStop": {
+        "exec": { "command": ["/bin/sh", "-lc", "echo stopping"] },
+        "terminationGracePeriodSeconds": 30
+      }
+    }
   }'
 ```
 
@@ -281,35 +299,7 @@ Update sandbox metadata or name.
 
 #### `DELETE /api/v1/sandboxes/{sandbox_id}`
 
-Delete a sandbox (stops and removes the pod).
-
-**Query parameters:**
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `timeout` | string? | Grace period before force-kill (e.g. `30s`, `5m`). Default: `10s` |
-
----
-
-#### `POST /api/v1/sandboxes/{sandbox_id}/start`
-
-Start a stopped sandbox (scales pod replicas to 1).
-
----
-
-#### `POST /api/v1/sandboxes/{sandbox_id}/stop`
-
-Stop a running sandbox (scales pod replicas to 0).
-
-**Query parameters:** `timeout` — pod termination grace period.
-
----
-
-#### `POST /api/v1/sandboxes/{sandbox_id}/restart`
-
-Restart a sandbox pod (deletes current pod, Deployment creates a new one).
-
-**Query parameters:** `timeout` — pod termination grace period.
+Delete/release a sandbox. Litterbox has no explicit stop/start/restart lifecycle for sandboxes; deletion is the only explicit shutdown path. If the template defines `preStop.terminationGracePeriodSeconds`, that value is used internally as the Kubernetes termination grace period.
 
 ---
 

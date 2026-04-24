@@ -5,7 +5,7 @@ from enum import StrEnum
 from math import ceil
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 def utcnow() -> datetime:
@@ -53,8 +53,49 @@ class HostPathMount(BaseModel):
     read_only: bool = False
 
 
+class LifecycleExecAction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    command: list[str] = Field(min_length=1)
+
+    @field_validator("command")
+    @classmethod
+    def validate_command(cls, value: list[str]) -> list[str]:
+        if any(not item for item in value):
+            raise ValueError("lifecycle exec command entries must be non-empty strings")
+        return value
+
+
+class LifecycleAction(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True, extra="forbid")
+
+    exec: LifecycleExecAction
+
+
+class PreStopLifecycleAction(LifecycleAction):
+    termination_grace_period_seconds: int | None = Field(
+        default=None,
+        alias="terminationGracePeriodSeconds",
+        ge=1,
+        le=300,
+    )
+
+
+class SandboxLifecycle(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True, extra="forbid")
+
+    post_start: LifecycleAction | None = Field(default=None, alias="postStart")
+    pre_stop: PreStopLifecycleAction | None = Field(default=None, alias="preStop")
+
+    @model_validator(mode="after")
+    def require_action(self) -> "SandboxLifecycle":
+        if self.post_start is None and self.pre_stop is None:
+            raise ValueError("lifecycle must define at least one action")
+        return self
+
+
 class Template(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True)
 
     id: str
     name: str
@@ -68,6 +109,7 @@ class Template(BaseModel):
     memory_request: int | None = None
     host_path_mounts: list[HostPathMount] = Field(default_factory=list)
     ttl_seconds: int | None = None
+    lifecycle: SandboxLifecycle | None = None
     metadata: dict[str, str] = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
@@ -93,6 +135,7 @@ class CreateTemplateRequest(BaseModel):
     memory_request: int | None = Field(default=None, ge=128, le=131072)
     host_path_mounts: list[HostPathMount] = Field(default_factory=list)
     ttl_seconds: int | None = Field(default=None, ge=60, le=86400)
+    lifecycle: SandboxLifecycle | None = None
     metadata: dict[str, str] = Field(default_factory=dict)
 
 
@@ -108,6 +151,7 @@ class UpdateTemplateRequest(BaseModel):
     memory_request: int | None = Field(default=None, ge=128, le=131072)
     host_path_mounts: list[HostPathMount] | None = None
     ttl_seconds: int | None = Field(default=None, ge=60, le=86400)
+    lifecycle: SandboxLifecycle | None = None
     metadata: dict[str, str] | None = None
 
 

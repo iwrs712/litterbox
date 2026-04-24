@@ -473,21 +473,6 @@ def test_terminal_websocket_endpoint(client, created_sandbox):
         assert "ws-ok" in data["data"]
 
 
-def test_stop_and_start_sandbox_endpoints(client, created_sandbox):
-    stop = client.post(f"/api/v1/sandboxes/{created_sandbox}/stop", params={"timeout": "5s"})
-    assert stop.status_code == 200
-    wait_until(lambda: client.get(f"/api/v1/sandboxes/{created_sandbox}").json()["data"]["status"] == "stopped")
-    start = client.post(f"/api/v1/sandboxes/{created_sandbox}/start")
-    assert start.status_code == 200
-    wait_until(lambda: client.get(f"/api/v1/sandboxes/{created_sandbox}").json()["data"]["status"] == "running")
-
-
-def test_restart_sandbox_endpoint(client, created_sandbox):
-    response = client.post(f"/api/v1/sandboxes/{created_sandbox}/restart", params={"timeout": "5s"})
-    assert response.status_code == 200
-    wait_until(lambda: client.get(f"/api/v1/sandboxes/{created_sandbox}").json()["data"]["status"] == "running")
-
-
 def test_ttl_endpoints(client, created_sandbox):
     update = client.put(f"/api/v1/sandboxes/{created_sandbox}/ttl", json={"ttl_seconds": 300})
     assert update.status_code == 200
