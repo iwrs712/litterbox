@@ -195,8 +195,8 @@ export function TemplateDetail() {
         </Card>
       </div>
 
-      {/* Command, Environment Variables, TTL, and Host Path Mounts */}
-      {(template.command || (template.env && template.env.length > 0) || template.ttl_seconds || (template.host_path_mounts && template.host_path_mounts.length > 0)) && (
+      {/* Command, Environment Variables, TTL, Lifecycle, and Host Path Mounts */}
+      {(template.command || (template.env && template.env.length > 0) || template.ttl_seconds || template.lifecycle || (template.host_path_mounts && template.host_path_mounts.length > 0)) && (
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -238,6 +238,14 @@ export function TemplateDetail() {
                     ({Math.floor(template.ttl_seconds / 3600)}h {Math.floor((template.ttl_seconds % 3600) / 60)}m)
                   </span>
                 </div>
+              </div>
+            )}
+            {template.lifecycle && (
+              <div>
+                <p className="text-sm text-muted-foreground mb-2">Lifecycle Hooks</p>
+                <pre className="text-xs bg-muted px-3 py-2 rounded overflow-x-auto">
+                  {JSON.stringify(template.lifecycle, null, 2)}
+                </pre>
               </div>
             )}
             {template.host_path_mounts && template.host_path_mounts.length > 0 && (

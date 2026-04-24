@@ -232,6 +232,7 @@ class SandboxService:
             template = self.template_service.get_template(sandbox.template_id)
         except Exception:
             template = None
+        grace_period_seconds = self._termination_grace_period_seconds(template)
         # Delegate expose resource cleanup to ServiceExposeService so that the
         # naming convention (svc-/ing- prefix) lives in exactly one place.
         if self.expose_service is not None:
@@ -252,20 +253,7 @@ class SandboxService:
             namespace=self.gateway.namespace,
             deletion_reason=deletion_reason,
         )
-        self.gateway.delete_deployment(sandbox_id)
-
-    def start_sandbox(self, sandbox_id: str) -> None:
-        self.gateway.scale_deployment(sandbox_id, 1)
-
-    def stop_sandbox(self, sandbox_id: str, grace_period_seconds: int = 0) -> None:
-        if grace_period_seconds > 0:
-            for pod in self.gateway.list_pods(f"app={sandbox_id},component=sandbox"):
-                self.gateway.delete_pod(pod.metadata.name, grace_period_seconds=grace_period_seconds)
-        self.gateway.scale_deployment(sandbox_id, 0)
-
-    def restart_sandbox(self, sandbox_id: str, timeout_seconds: int) -> None:
-        for pod in self.gateway.list_pods(f"app={sandbox_id},component=sandbox"):
-            self.gateway.delete_pod(pod.metadata.name, grace_period_seconds=timeout_seconds)
+        self.gateway.delete_deployment(sandbox_id, grace_period_seconds=grace_period_seconds)
 
     def exec_command(self, sandbox_id: str, command: list[str]) -> ExecCommandResult:
         from orchestrator.services.workspace import WorkspaceService
@@ -391,6 +379,8 @@ class SandboxService:
                 "memory": f"{template.memory_request or template.memory_mb}Mi",
             },
         )
+        lifecycle = self._build_container_lifecycle(template)
+        termination_grace_period_seconds = self._termination_grace_period_seconds(template)
         pod_spec = client.V1PodSpec(
             runtime_class_name=(
                 self.settings.kubernetes.runtime_class
@@ -405,12 +395,14 @@ class SandboxService:
             ),
             restart_policy="Always",
             volumes=volumes or None,
+            termination_grace_period_seconds=termination_grace_period_seconds or None,
             containers=[
                 client.V1Container(
                     name="main",
                     image=template.image,
                     command=shlex.split(template.command) if template.command else None,
                     env=env or None,
+                    lifecycle=lifecycle,
                     resources=resources,
                     volume_mounts=volume_mounts or None,
                     stdin=True,
@@ -436,6 +428,31 @@ class SandboxService:
                 ),
             ),
         )
+
+    @staticmethod
+    def _build_container_lifecycle(template: Template) -> client.V1Lifecycle | None:
+        if template.lifecycle is None:
+            return None
+
+        post_start = None
+        if template.lifecycle.post_start is not None:
+            post_start = client.V1LifecycleHandler(
+                _exec=client.V1ExecAction(command=template.lifecycle.post_start.exec.command)
+            )
+
+        pre_stop = None
+        if template.lifecycle.pre_stop is not None:
+            pre_stop = client.V1LifecycleHandler(
+                _exec=client.V1ExecAction(command=template.lifecycle.pre_stop.exec.command)
+            )
+
+        return client.V1Lifecycle(post_start=post_start, pre_stop=pre_stop)
+
+    @staticmethod
+    def _termination_grace_period_seconds(template: Template | None) -> int:
+        if template is None or template.lifecycle is None or template.lifecycle.pre_stop is None:
+            return 0
+        return template.lifecycle.pre_stop.termination_grace_period_seconds or 0
 
     def _deployment_to_sandbox(self, deployment: client.V1Deployment) -> Sandbox:
         labels = deployment.metadata.labels or {}
