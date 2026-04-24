@@ -229,6 +229,7 @@ class AllocateSandboxRequest(BaseModel):
     name: str = ""
     template_id: str
     metadata: dict[str, str] = Field(default_factory=dict)
+    env: list[str] = Field(default_factory=list)
 
 
 class UpdateSandboxRequest(BaseModel):

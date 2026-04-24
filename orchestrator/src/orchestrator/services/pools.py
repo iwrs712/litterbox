@@ -189,6 +189,10 @@ class PoolService:
         from orchestrator.services.metrics import sandbox_metrics  # 延迟导入，避免循环
 
         pool = self.repository.get(req.template_id)
+        if req.env and pool and pool.enabled:
+            raise ValueError(
+                "env override is not supported when a warm pool is enabled for this template"
+            )
         if pool and pool.enabled:
             lock_value = self._acquire_claim_lock(req.template_id)
             if lock_value is None:
@@ -234,6 +238,7 @@ class PoolService:
             template_id=req.template_id,
             name=req.name,
             metadata=req.metadata,
+            env=req.env,
             wait_ready=True,
             dispatch_events=True,
             ttl_seconds=self._pool_ttl_seconds(req.template_id),
