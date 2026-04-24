@@ -58,6 +58,7 @@ export function Templates() {
     command: '', // 容器启动命令（单行字符串，提交时转为数组）
     env: '', // 环境变量（多行文本，每行一个 KEY=VALUE）
     host_path_mounts: '', // 主机路径挂载（JSON格式或多行格式）
+    lifecycle: '', // Sandbox lifecycle hooks (JSON)
     cpu_millicores: 1000, // 默认 1 核 = 1000m
     cpu_request: undefined as number | undefined,
     memory_mb: 512,
@@ -118,6 +119,17 @@ export function Templates() {
         }
       }
 
+      let lifecycle = undefined;
+      if (formData.lifecycle.trim()) {
+        try {
+          lifecycle = JSON.parse(formData.lifecycle.trim());
+        } catch (e) {
+          console.error('Failed to parse lifecycle:', e);
+          window.alert('Lifecycle must be valid JSON.');
+          return;
+        }
+      }
+
       await createTemplate({
         id: formData.id || undefined, // 空字符串转为 undefined，让后端自动生成
         name: formData.name,
@@ -125,6 +137,7 @@ export function Templates() {
         command: formData.command.trim() || undefined, // command 作为字符串
         env: envArray.length > 0 ? envArray : undefined,
         host_path_mounts: hostPathMounts,
+        lifecycle,
         cpu_millicores: formData.cpu_millicores,
         cpu_request: formData.cpu_request,
         memory_mb: formData.memory_mb,
@@ -170,12 +183,24 @@ export function Templates() {
         }
       }
 
+      let lifecycle = undefined;
+      if (formData.lifecycle.trim()) {
+        try {
+          lifecycle = JSON.parse(formData.lifecycle.trim());
+        } catch (e) {
+          console.error('Failed to parse lifecycle:', e);
+          window.alert('Lifecycle must be valid JSON.');
+          return;
+        }
+      }
+
       const updateData: UpdateTemplateRequest = {
         name: formData.name,
         image: formData.image,
         command: formData.command.trim() || undefined, // command 作为字符串
         env: envArray.length > 0 ? envArray : undefined,
         host_path_mounts: hostPathMounts,
+        lifecycle,
         cpu_millicores: formData.cpu_millicores,
         cpu_request: formData.cpu_request,
         memory_mb: formData.memory_mb,
@@ -223,6 +248,7 @@ export function Templates() {
       command: template.command || '', // command 直接作为字符串
       env: template.env ? template.env.join('\n') : '', // env 数组转为多行文本
       host_path_mounts: template.host_path_mounts ? JSON.stringify(template.host_path_mounts, null, 2) : '', // host_path_mounts 转为格式化 JSON
+      lifecycle: template.lifecycle ? JSON.stringify(template.lifecycle, null, 2) : '',
       cpu_millicores: template.cpu_millicores,
       cpu_request: template.cpu_request,
       memory_mb: template.memory_mb,
@@ -248,6 +274,7 @@ export function Templates() {
       command: '', // Reset command
       env: '', // Reset env
       host_path_mounts: '', // Reset host_path_mounts
+      lifecycle: '',
       cpu_millicores: 1000, // 默认 1 核 = 1000m
       cpu_request: undefined,
       memory_mb: 512,
@@ -550,6 +577,21 @@ export function Templates() {
             </div>
 
             <div className="space-y-2">
+              <Label htmlFor="create-lifecycle">Lifecycle Hooks (Optional)</Label>
+              <Textarea
+                id="create-lifecycle"
+                value={formData.lifecycle}
+                onChange={(e) => setFormData({ ...formData, lifecycle: e.target.value })}
+                placeholder={'{\n  "postStart": {\n    "exec": { "command": ["/bin/sh", "-lc", "echo started"] }\n  },\n  "preStop": {\n    "exec": { "command": ["/bin/sh", "-lc", "echo stopping"] },\n    "terminationGracePeriodSeconds": 30\n  }\n}'}
+                rows={10}
+                disabled={actionLoading === 'create'}
+              />
+              <p className="text-xs text-muted-foreground">
+                Enter lifecycle hooks in JSON format. Supports postStart.exec.command and preStop.exec.command with terminationGracePeriodSeconds.
+              </p>
+            </div>
+
+            <div className="space-y-2">
               <Label htmlFor="create-ttl">TTL (Time To Live) - Seconds (Optional)</Label>
               <Input
                 id="create-ttl"
@@ -764,6 +806,21 @@ export function Templates() {
               />
               <p className="text-xs text-muted-foreground">
                 Enter host path mounts in JSON array format. Each mount has host_path, container_path, and read_only fields.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="edit-lifecycle">Lifecycle Hooks (Optional)</Label>
+              <Textarea
+                id="edit-lifecycle"
+                value={formData.lifecycle}
+                onChange={(e) => setFormData({ ...formData, lifecycle: e.target.value })}
+                placeholder={'{\n  "postStart": {\n    "exec": { "command": ["/bin/sh", "-lc", "echo started"] }\n  },\n  "preStop": {\n    "exec": { "command": ["/bin/sh", "-lc", "echo stopping"] },\n    "terminationGracePeriodSeconds": 30\n  }\n}'}
+                rows={10}
+                disabled={actionLoading === 'edit'}
+              />
+              <p className="text-xs text-muted-foreground">
+                Enter lifecycle hooks in JSON format. Supports postStart.exec.command and preStop.exec.command with terminationGracePeriodSeconds.
               </p>
             </div>
 

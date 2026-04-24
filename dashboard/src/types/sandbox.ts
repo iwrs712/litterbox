@@ -13,6 +13,23 @@ export interface HostPathMount {
   read_only: boolean; // 是否只读
 }
 
+export interface LifecycleExecAction {
+  command: string[];
+}
+
+export interface LifecycleAction {
+  exec: LifecycleExecAction;
+}
+
+export interface PreStopLifecycleAction extends LifecycleAction {
+  terminationGracePeriodSeconds?: number;
+}
+
+export interface TemplateLifecycle {
+  postStart?: LifecycleAction;
+  preStop?: PreStopLifecycleAction;
+}
+
 // Sandbox 主体
 export interface Sandbox {
   id: string;
@@ -46,6 +63,7 @@ export interface Template {
   memory_mb: number;
   memory_request?: number;
   ttl_seconds?: number; // TTL 秒数，可选，范围 300-86400（5分钟-24小时）
+  lifecycle?: TemplateLifecycle;
   metadata?: Record<string, any>; // 包含 user_id 等自定义字段
   created_at: string;
   updated_at: string;
@@ -72,6 +90,7 @@ export interface CreateTemplateRequest {
   memory_mb: number;
   memory_request?: number;
   ttl_seconds?: number; // TTL 秒数，可选，范围 300-86400（5分钟-24小时）
+  lifecycle?: TemplateLifecycle;
   metadata?: Record<string, any>; // 包含 user_id 等自定义字段
 }
 
@@ -88,6 +107,7 @@ export interface UpdateTemplateRequest {
   memory_mb?: number;
   memory_request?: number;
   ttl_seconds?: number; // TTL 秒数，可选，范围 300-86400（5分钟-24小时）
+  lifecycle?: TemplateLifecycle;
   metadata?: Record<string, any>; // 包含 user_id 等自定义字段
 }
 

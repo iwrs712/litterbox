@@ -116,7 +116,7 @@ Owns the lifecycle of sandbox deployments:
 
 - build deployment specs from templates
 - create/read/list/update/delete sandboxes
-- scale stop/start/restart workloads
+- apply template lifecycle hooks during create/delete
 - map Kubernetes state to `SandboxStatus`
 - manage TTL annotations and Redis TTL scheduling
 - dispatch sandbox lifecycle webhooks
@@ -423,7 +423,7 @@ The control plane persists relatively small metadata objects that are already ti
 
 ### Why One Deployment Per Sandbox
 
-A deployment gives easy scaling to zero/one, restart semantics, label/annotation metadata, and standard pod management through the Kubernetes API.
+A deployment gives each sandbox stable label/annotation metadata and standard pod management through the Kubernetes API.
 
 ### Why Redis For More Than Celery
 
