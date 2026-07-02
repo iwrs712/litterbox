@@ -6,4 +6,4 @@ plugins:
       - target=ts
       - import_extension=none
 inputs:
-  - directory: ../sandbox-agent-go/proto
+  - directory: ../envd/proto
