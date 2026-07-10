@@ -5,7 +5,13 @@ from pathlib import Path
 import yaml
 
 
-MANIFEST = Path(__file__).parents[1] / "k8s" / "envd" / "node-installer-daemonset.yaml"
+MANIFEST = (
+    Path(__file__).parents[2]
+    / "envd"
+    / "deploy"
+    / "node-installer"
+    / "daemonset.yaml"
+)
 
 
 def test_envd_node_installer_targets_kata_nodes_and_writes_host_binary() -> None:
@@ -18,7 +24,7 @@ def test_envd_node_installer_targets_kata_nodes_and_writes_host_binary() -> None
         "katacontainers.io/kata-runtime": "true",
         "kubernetes.io/arch": "amd64",
     }
-    assert installer["image"].endswith("envd-node-installer:0.1.4-amd64")
+    assert installer["image"].endswith("envd-node-installer:0.1.5-amd64")
     assert installer["volumeMounts"] == [
         {"name": "envd-host-bin", "mountPath": "/host-bin"}
     ]
@@ -32,8 +38,8 @@ def test_envd_node_installer_targets_kata_nodes_and_writes_host_binary() -> None
         }
     ]
     command = " ".join(installer["command"])
-    assert "/payload/sandbox-agent" in command
-    assert "/host-bin/sandbox-agent" in command
+    assert "/payload/envd" in command
+    assert "/host-bin/envd" in command
 
 
 def test_envd_node_installer_is_an_init_container() -> None:
@@ -43,7 +49,7 @@ def test_envd_node_installer_is_an_init_container() -> None:
     assert len(pod_spec["initContainers"]) == 1
     ready = pod_spec["containers"][0]
     assert ready["name"] == "ready"
-    assert ready["image"].endswith("envd-node-installer:0.1.4-amd64")
+    assert ready["image"].endswith("envd-node-installer:0.1.5-amd64")
     assert ready["volumeMounts"] == [
         {"name": "envd-host-bin", "mountPath": "/host-bin", "readOnly": True}
     ]
