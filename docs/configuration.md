@@ -164,14 +164,14 @@ storage_class = "litterbox-workspace-lvm"
 
 ## [envd]
 
-envd（`sandbox-agent`）数据面配置。启用后，每个 Sandbox 主容器会通过 `postStart` 启动 envd，orchestrator 通过它提供命令执行、文件读写和 PTY。
+envd 数据面配置。启用后，每个 Sandbox 主容器会通过 `postStart` 启动 envd，orchestrator 通过它提供命令执行、文件读写和 PTY。
 
 | Key | 类型 | 默认值 | 说明 |
 |---|---|---|---|
 | `enabled` | boolean | `false` | 是否向 Sandbox 注入并启动 envd |
 | `version` | string | `"0.1.0"` | envd 版本，同时作为节点选择标签 `litterbox.io/envd-version` |
-| `host_binary_path` | string | `"/opt/litterbox/bin/sandbox-agent"` | 节点上的二进制路径，由 installer DaemonSet 写入 |
-| `container_binary_path` | string | `"/opt/litterbox/envd/sandbox-agent"` | 容器内的只读挂载路径 |
+| `host_binary_path` | string | `"/opt/litterbox/bin/envd"` | 节点上的二进制路径，由 installer DaemonSet 写入 |
+| `container_binary_path` | string | `"/opt/litterbox/bin/envd"` | 容器内的只读挂载路径 |
 | `port` | integer | `49983` | envd 监听端口 |
 | `connect_timeout_seconds` | float | `3.0` | 代理连接 envd 的超时 |
 | `pod_ip_cache_ttl_seconds` | float | `5.0` | Pod IP 缓存时间；`0` 表示不缓存 |
@@ -181,8 +181,8 @@ envd（`sandbox-agent`）数据面配置。启用后，每个 Sandbox 主容器�
 ```
 ORCHESTRATOR__ENVD__ENABLED=true
 ORCHESTRATOR__ENVD__VERSION=0.1.0
-ORCHESTRATOR__ENVD__HOST_BINARY_PATH=/opt/litterbox/bin/sandbox-agent
-ORCHESTRATOR__ENVD__CONTAINER_BINARY_PATH=/opt/litterbox/envd/sandbox-agent
+ORCHESTRATOR__ENVD__HOST_BINARY_PATH=/opt/litterbox/bin/envd
+ORCHESTRATOR__ENVD__CONTAINER_BINARY_PATH=/opt/litterbox/bin/envd
 ORCHESTRATOR__ENVD__PORT=49983
 ```
 
@@ -190,8 +190,8 @@ ORCHESTRATOR__ENVD__PORT=49983
 [envd]
 enabled                 = true
 version                 = "0.1.0"
-host_binary_path        = "/opt/litterbox/bin/sandbox-agent"
-container_binary_path   = "/opt/litterbox/envd/sandbox-agent"
+host_binary_path        = "/opt/litterbox/bin/envd"
+container_binary_path   = "/opt/litterbox/bin/envd"
 port                    = 49983
 connect_timeout_seconds = 3.0
 pod_ip_cache_ttl_seconds = 5.0
@@ -470,8 +470,8 @@ bearer_token = "replace-with-strong-token"
 | `ORCHESTRATOR__WORKSPACE__STORAGE_CLASS` | `workspace.storage_class` | `litterbox-workspace-lvm` |
 | `ORCHESTRATOR__ENVD__ENABLED` | `envd.enabled` | `false` |
 | `ORCHESTRATOR__ENVD__VERSION` | `envd.version` | `0.1.0` |
-| `ORCHESTRATOR__ENVD__HOST_BINARY_PATH` | `envd.host_binary_path` | `/opt/litterbox/bin/sandbox-agent` |
-| `ORCHESTRATOR__ENVD__CONTAINER_BINARY_PATH` | `envd.container_binary_path` | `/opt/litterbox/envd/sandbox-agent` |
+| `ORCHESTRATOR__ENVD__HOST_BINARY_PATH` | `envd.host_binary_path` | `/opt/litterbox/bin/envd` |
+| `ORCHESTRATOR__ENVD__CONTAINER_BINARY_PATH` | `envd.container_binary_path` | `/opt/litterbox/bin/envd` |
 | `ORCHESTRATOR__ENVD__PORT` | `envd.port` | `49983` |
 | `ORCHESTRATOR__ENVD__CONNECT_TIMEOUT_SECONDS` | `envd.connect_timeout_seconds` | `3.0` |
 | `ORCHESTRATOR__ENVD__POD_IP_CACHE_TTL_SECONDS` | `envd.pod_ip_cache_ttl_seconds` | `5.0` |

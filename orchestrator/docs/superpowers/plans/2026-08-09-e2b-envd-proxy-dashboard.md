@@ -17,7 +17,7 @@
 - `orchestrator/src/orchestrator/services/envd_proxy.py`: stream requests to a sandbox envd.
 - `orchestrator/src/orchestrator/routes/envd.py`: authenticated catch-all proxy route.
 - `orchestrator/src/orchestrator/infra/kubernetes.py`: resolve a ready Pod IP; remove Exec support.
-- `sandbox-agent-go/internal/server/server.go`: remove legacy filesystem/process REST routes.
+- `envd/internal/server/server.go`: remove legacy filesystem/process REST routes.
 - `dashboard/src/gen/envd/`: generated envd TypeScript descriptors.
 - `dashboard/src/lib/envd.ts`: Connect transport, command, and terminal helpers.
 - `dashboard/src/components/Terminal.tsx`: E2B Process terminal UI.
@@ -44,12 +44,12 @@ def test_build_deployment_injects_envd() -> None:
     volume = next(item for item in pod_spec.volumes if item.name == "envd")
     mount = next(item for item in container.volume_mounts if item.name == "envd")
 
-    assert volume.host_path.path == "/opt/litterbox/bin/sandbox-agent"
+    assert volume.host_path.path == "/opt/litterbox/bin/envd"
     assert volume.host_path.type == "File"
-    assert mount.mount_path == "/opt/litterbox/envd/sandbox-agent"
+    assert mount.mount_path == "/opt/litterbox/bin/envd"
     assert mount.read_only is True
     assert container.lifecycle.post_start._exec.command == [
-        "/opt/litterbox/envd/sandbox-agent", "daemon",
+        "/opt/litterbox/bin/envd", "daemon",
         "--host", "0.0.0.0", "--port", "49983",
         "--filesystem-root", "/",
     ]
@@ -69,8 +69,8 @@ Expected: failure because `EnvdConfig` and Deployment injection do not exist.
 ```python
 class EnvdConfig(BaseModel):
     enabled: bool = False
-    host_binary_path: str = "/opt/litterbox/bin/sandbox-agent"
-    container_binary_path: str = "/opt/litterbox/envd/sandbox-agent"
+    host_binary_path: str = "/opt/litterbox/bin/envd"
+    container_binary_path: str = "/opt/litterbox/bin/envd"
     port: int = Field(default=49983, ge=1, le=65535)
     connect_timeout_seconds: float = Field(default=3.0, gt=0)
 
@@ -295,9 +295,9 @@ Expected: all tests pass. Commit Task 3 files with `git commit -m "refactor: rem
 ### Task 4: Remove Legacy Go Filesystem and Process REST APIs
 
 **Files:**
-- Modify: `sandbox-agent-go/internal/server/server.go`
-- Modify: `sandbox-agent-go/internal/server/server_test.go`
-- Delete or reduce: legacy REST-specific tests under `sandbox-agent-go/internal/server/`
+- Modify: `envd/internal/server/server.go`
+- Modify: `envd/internal/server/server_test.go`
+- Delete or reduce: legacy REST-specific tests under `envd/internal/server/`
 
 - [ ] **Step 1: Write a failing route-removal test**
 
@@ -326,7 +326,7 @@ func TestLegacyDataPlaneRoutesAreRemoved(t *testing.T) {
 Run:
 
 ```bash
-cd sandbox-agent-go
+cd envd
 go test ./internal/server -run TestLegacyDataPlaneRoutesAreRemoved -count=1
 ```
 
@@ -362,7 +362,7 @@ Delete unreachable filesystem/process REST handlers. Use `rg` to preserve helper
 Run:
 
 ```bash
-cd sandbox-agent-go
+cd envd
 make generate
 make test
 go test -race ./...
@@ -418,7 +418,7 @@ plugins:
       - target=ts
       - import_extension=none
 inputs:
-  - directory: ../sandbox-agent-go/proto
+  - directory: ../envd/proto
 ```
 
 Add `"generate:envd": "buf generate --template buf.gen.yaml"` and make `build` run generation before TypeScript/Vite. Run `npm run generate:envd` and commit generated descriptors.
@@ -593,7 +593,7 @@ Expected: tests and build pass. Commit with `git commit -m "feat: run dashboard 
 
 **Files:**
 - Modify: `orchestrator/ARCHITECTURE.md`
-- Modify: `sandbox-agent-go/deploy/kata/README.md`
+- Modify: `envd/deploy/kata/README.md`
 
 - [ ] **Step 1: Document installation and enablement**
 
@@ -601,15 +601,15 @@ Document:
 
 ```bash
 sudo install -D -m 0755 \
-  sandbox-agent-go/bin/sandbox-agent-linux-amd64 \
-  /opt/litterbox/bin/sandbox-agent
+  envd/bin/envd-linux-amd64 \
+  /opt/litterbox/bin/envd
 ```
 
 ```toml
 [envd]
 enabled = true
-host_binary_path = "/opt/litterbox/bin/sandbox-agent"
-container_binary_path = "/opt/litterbox/envd/sandbox-agent"
+host_binary_path = "/opt/litterbox/bin/envd"
+container_binary_path = "/opt/litterbox/bin/envd"
 port = 49983
 connect_timeout_seconds = 3.0
 ```
@@ -623,13 +623,13 @@ cd orchestrator
 pytest -q
 python -m compileall -q src
 
-cd ../sandbox-agent-go
+cd ../envd
 make generate
 make test
 go test -race ./...
 go vet ./...
 make build-linux-amd64
-file bin/sandbox-agent-linux-amd64
+file bin/envd-linux-amd64
 
 cd ../dashboard
 npm run generate:envd
