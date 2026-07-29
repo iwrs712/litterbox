@@ -311,6 +311,10 @@ class SandboxService:
         self.delete_sandbox(sandbox_id, deletion_reason="ttl_expired")
         return True
 
+    @staticmethod
+    def _workspace_claim_name(sandbox_id: str) -> str:
+        return f"workspace-{sandbox_id}"
+
     def _build_deployment(
         self,
         *,
@@ -355,8 +359,16 @@ class SandboxService:
         for key, value in parse_env_list(merged_env_items):
             merged_env_map[key] = value
         container_env = [client.V1EnvVar(name=key, value=value) for key, value in merged_env_map.items()]
-        volume_mounts: list[client.V1VolumeMount] = []
-        volumes: list[client.V1Volume] = []
+        workspace_claim_name = self._workspace_claim_name(sandbox_id)
+        volume_mounts = [client.V1VolumeMount(name="workspace", mount_path="/workspace")]
+        volumes = [
+            client.V1Volume(
+                name="workspace",
+                persistent_volume_claim=client.V1PersistentVolumeClaimVolumeSource(
+                    claim_name=workspace_claim_name,
+                ),
+            )
+        ]
         for index, mount in enumerate(template.host_path_mounts):
             volume_name = f"host-mount-{index}"
             volumes.append(

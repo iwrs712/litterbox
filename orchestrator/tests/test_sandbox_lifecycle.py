@@ -67,6 +67,27 @@ def test_build_deployment_maps_template_lifecycle_to_pod_spec() -> None:
     assert container.lifecycle.pre_stop._exec.command == ["/bin/sh", "-lc", "echo stopping"]
 
 
+def test_build_deployment_mounts_workspace_pvc() -> None:
+    service = build_service()
+
+    deployment = service._build_deployment(
+        sandbox_id="sbx-workspace",
+        template=build_template(),
+        metadata={},
+        name="",
+        env=None,
+        pool_state="none",
+        ttl_seconds=None,
+    )
+
+    pod_spec = deployment.spec.template.spec
+    volumes = {volume.name: volume for volume in pod_spec.volumes or []}
+    mounts = {mount.name: mount for mount in pod_spec.containers[0].volume_mounts or []}
+
+    assert volumes["workspace"].persistent_volume_claim.claim_name == "workspace-sbx-workspace"
+    assert mounts["workspace"].mount_path == "/workspace"
+
+
 def test_delete_sandbox_uses_template_pre_stop_grace_period() -> None:
     template = build_template(
         {
