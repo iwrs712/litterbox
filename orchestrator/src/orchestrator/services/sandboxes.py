@@ -78,7 +78,13 @@ class SandboxService:
             pool_state=pool_state,
             ttl_seconds=ttl_seconds,
         )
-        self.gateway.create_deployment(deployment)
+        workspace_claim = self._build_workspace_claim(sandbox_id)
+        self.gateway.create_persistent_volume_claim(workspace_claim)
+        try:
+            self.gateway.create_deployment(deployment)
+        except Exception:
+            self.gateway.delete_persistent_volume_claim(workspace_claim.metadata.name)
+            raise
         self._sync_ttl_schedule(sandbox_id, deployment.metadata.annotations or {})
         pod = None
         # 只对用户直接等待的路径（wait_ready=True）记录指标；
@@ -314,6 +320,27 @@ class SandboxService:
     @staticmethod
     def _workspace_claim_name(sandbox_id: str) -> str:
         return f"workspace-{sandbox_id}"
+
+    def _build_workspace_claim(self, sandbox_id: str) -> client.V1PersistentVolumeClaim:
+        return client.V1PersistentVolumeClaim(
+            metadata=client.V1ObjectMeta(
+                name=self._workspace_claim_name(sandbox_id),
+                namespace=self.gateway.namespace,
+                labels={
+                    "app": "litterbox",
+                    "component": "workspace",
+                    "litterbox.io/sandbox-id": sandbox_id,
+                },
+            ),
+            spec=client.V1PersistentVolumeClaimSpec(
+                access_modes=["ReadWriteOnce"],
+                volume_mode="Filesystem",
+                storage_class_name=self.settings.kubernetes.storage_class or None,
+                resources=client.V1ResourceRequirements(
+                    requests={"storage": self.settings.workspace.default_size},
+                ),
+            ),
+        )
 
     def _build_deployment(
         self,

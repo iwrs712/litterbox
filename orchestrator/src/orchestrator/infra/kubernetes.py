@@ -103,6 +103,19 @@ class KubernetesGateway:
             if exc.status != 404:
                 raise
 
+    def create_persistent_volume_claim(
+        self,
+        claim: client.V1PersistentVolumeClaim,
+    ) -> client.V1PersistentVolumeClaim:
+        return self.core.create_namespaced_persistent_volume_claim(self.namespace, claim)
+
+    def delete_persistent_volume_claim(self, name: str) -> None:
+        try:
+            self.core.delete_namespaced_persistent_volume_claim(name, self.namespace)
+        except ApiException as exc:
+            if exc.status != 404:
+                raise
+
     def create_deployment(self, deployment: client.V1Deployment) -> client.V1Deployment:
         return self.apps.create_namespaced_deployment(self.namespace, deployment)
 
