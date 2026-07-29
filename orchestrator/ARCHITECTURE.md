@@ -222,6 +222,8 @@ The project spreads state across Kubernetes and Redis:
   one sandbox per deployment
 - `Pod`
   runtime backing each sandbox deployment
+- `PersistentVolumeClaim`
+  one durable `/workspace` filesystem per sandbox, created before its Deployment
 - `Service`
   per-expose service objects
 - `Ingress`
@@ -256,6 +258,7 @@ POST /sandboxes
 -> PoolService.allocate_sandbox()
 -> no reusable warm sandbox
 -> SandboxService.create_sandbox()
+-> workspace PVC created
 -> Kubernetes Deployment created
 -> wait for ready pod
 -> SANDBOX_STARTED + SANDBOX_READY dispatched
@@ -268,6 +271,7 @@ POST /sandboxes
 - CPU/memory limits and requests
 - optional runtime class
 - optional image pull secret
+- workspace PVC mounted at `/workspace`
 - optional host-path volume mounts
 - labels/annotations carrying logical metadata
 
