@@ -27,6 +27,10 @@ class SandboxConfig(BaseModel):
     base_domain: str = "runlet.cn"
 
 
+class WorkspaceConfig(BaseModel):
+    default_size: str = "1Gi"
+
+
 class TTLConfig(BaseModel):
     default_ttl_seconds: int = 1800
     min_ttl_seconds: int = 60
@@ -55,6 +59,7 @@ class Settings(BaseModel):
     server: ServerConfig = Field(default_factory=ServerConfig)
     kubernetes: KubernetesConfig = Field(default_factory=KubernetesConfig)
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
+    workspace: WorkspaceConfig = Field(default_factory=WorkspaceConfig)
     ttl: TTLConfig = Field(default_factory=TTLConfig)
     webhook: WebhookConfig = Field(default_factory=WebhookConfig)
     celery: CeleryConfig = Field(default_factory=CeleryConfig)
