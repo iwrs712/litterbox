@@ -17,7 +17,7 @@ class ServerConfig(BaseModel):
 class KubernetesConfig(BaseModel):
     kubeconfig: str | None = None
     namespace: str = "default"
-    runtime_class: str | None = None
+    runtime_class: str | None = "kata-dragonball"
     storage_class: str | None = None
     image_pull_secret: str | None = None
 

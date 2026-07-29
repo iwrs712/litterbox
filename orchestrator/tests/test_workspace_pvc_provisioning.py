@@ -13,6 +13,10 @@ def test_workspace_default_size_is_one_gib() -> None:
     assert Settings().workspace.default_size == "1Gi"
 
 
+def test_default_runtime_class_is_dragonball() -> None:
+    assert Settings().kubernetes.runtime_class == "kata-dragonball"
+
+
 class RecordingGateway:
     namespace = "default"
     available_runtime_classes: set[str] = set()
