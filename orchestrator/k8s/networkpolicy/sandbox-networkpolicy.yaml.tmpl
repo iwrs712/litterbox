@@ -1,0 +1,90 @@
+# Rendered by install.sh -- edit the template, not a copy of the output.
+#
+# Sandbox network isolation. Two policies, both selecting the Sandbox pods:
+#
+#   sandbox-ingress  Only the Orchestrator (envd proxy) and the ingress
+#                    controller (exposed ports) may open connections to a
+#                    Sandbox. This is what stops one Sandbox from reaching
+#                    another Sandbox's envd/sandbox-agent sidecar, and what
+#                    stops any unrelated cluster pod from reaching it too.
+#                    The sidecar itself is unauthenticated, so reachability
+#                    IS the access control.
+#
+#   sandbox-egress   DNS + the billing egress proxy + the public internet.
+#                    Everything inside the cluster (Postgres, Redis, other
+#                    control-plane services) is denied.
+#
+# Both are required. Egress alone happens to block Sandbox-to-Sandbox today
+# because it excludes the whole pod CIDR, but that is a side effect of one
+# policy: deleting or loosening it silently reopens the hole. Ingress is the
+# independent, intentional lock.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sandbox-ingress
+  namespace: ${SANDBOX_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: sandbox-network-policy
+    app.kubernetes.io/part-of: litterbox
+spec:
+  podSelector:
+    matchLabels:
+      ${SANDBOX_LABEL_KEY}: ${SANDBOX_LABEL_VALUE}
+  policyTypes: ["Ingress"]
+  ingress:
+    # Kubelet probes are unaffected: the policy controller always accepts
+    # traffic whose source is the pod's own node (addrtype --src-type LOCAL).
+    - from:
+        # Orchestrator, which proxies envd/process/filesystem calls straight
+        # to the Sandbox pod IP on the envd port.
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ${ORCHESTRATOR_NAMESPACE}
+        # Traefik, which fronts exposed ports via the per-expose Service.
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ${INGRESS_NAMESPACE}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sandbox-egress
+  namespace: ${SANDBOX_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: sandbox-network-policy
+    app.kubernetes.io/part-of: litterbox
+spec:
+  podSelector:
+    matchLabels:
+      ${SANDBOX_LABEL_KEY}: ${SANDBOX_LABEL_VALUE}
+  policyTypes: ["Egress"]
+  egress:
+    # Cluster DNS. Without this the Sandbox resolves nothing, including the
+    # public names that the ipBlock rule below is meant to allow.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ${DNS_NAMESPACE}
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    # Billing egress proxy (http_proxy / HTTP_PROXY point here).
+    # Narrowed to the proxy pods so the rest of that namespace stays denied.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ${BILLING_NAMESPACE}
+          podSelector:
+            matchLabels:
+              ${BILLING_LABEL_KEY}: ${BILLING_LABEL_VALUE}
+      ports:
+        - {protocol: TCP, port: ${BILLING_PORT}}
+    # Public internet. The pod and service CIDRs are excluded, which is what
+    # cuts Sandboxes off from Postgres, Redis and every other internal pod.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - ${CLUSTER_POD_CIDR}
+              - ${CLUSTER_SERVICE_CIDR}

@@ -1,0 +1,11 @@
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: ${LITTERBOX_WORKSPACE_STORAGE_CLASS}
+provisioner: local.csi.openebs.io
+allowVolumeExpansion: true
+reclaimPolicy: Delete
+volumeBindingMode: WaitForFirstConsumer
+parameters:
+  storage: lvm
+  volgroup: ${LITTERBOX_WORKSPACE_VG}

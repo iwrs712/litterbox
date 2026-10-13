@@ -34,7 +34,15 @@ def build_service() -> SandboxService:
         kubernetes=SimpleNamespace(
             runtime_class="",
             image_pull_secret="",
-        )
+            storage_class=None,
+        ),
+        workspace=SimpleNamespace(
+            enabled=True,
+            mount_path="/workspace",
+            storage_class=None,
+            default_size="1Gi",
+        ),
+        envd=SimpleNamespace(enabled=False),
     )
     return service
 
@@ -56,6 +64,7 @@ def test_build_deployment_maps_template_lifecycle_to_pod_spec() -> None:
         template=template,
         metadata={},
         name="",
+        env=None,
         pool_state="none",
         ttl_seconds=None,
     )
@@ -63,6 +72,7 @@ def test_build_deployment_maps_template_lifecycle_to_pod_spec() -> None:
     pod_spec = deployment.spec.template.spec
     container = pod_spec.containers[0]
     assert pod_spec.termination_grace_period_seconds == 30
+    assert container.image_pull_policy == "Always"
     assert container.lifecycle.post_start._exec.command == ["/bin/sh", "-lc", "echo started"]
     assert container.lifecycle.pre_stop._exec.command == ["/bin/sh", "-lc", "echo stopping"]
 
@@ -86,6 +96,7 @@ def test_build_deployment_mounts_workspace_pvc() -> None:
 
     assert volumes["workspace"].persistent_volume_claim.claim_name == "workspace-sbx-workspace"
     assert mounts["workspace"].mount_path == "/workspace"
+    assert pod_spec.init_containers is None
 
 
 def test_delete_sandbox_uses_template_pre_stop_grace_period() -> None:
@@ -107,6 +118,7 @@ def test_delete_sandbox_uses_template_pre_stop_grace_period() -> None:
         status=SandboxStatus.RUNNING,
     )
     service.template_service = SimpleNamespace(get_template=lambda template_id: template)
+    service.settings = SimpleNamespace(workspace=SimpleNamespace(enabled=True))
     service.expose_service = None
     service.gateway = SimpleNamespace(
         namespace="default",
@@ -114,6 +126,7 @@ def test_delete_sandbox_uses_template_pre_stop_grace_period() -> None:
         delete_deployment=lambda name, grace_period_seconds=0: deleted.update(
             {"name": name, "grace_period_seconds": grace_period_seconds}
         ),
+        delete_persistent_volume_claim=lambda _name: None,
     )
     service.webhook_dispatcher = SimpleNamespace(dispatch=lambda **kwargs: None)
 
@@ -130,6 +143,7 @@ def test_delete_sandbox_defaults_to_zero_grace_without_lifecycle() -> None:
     service._unschedule_current_ttl = lambda sandbox_id: None
     service.get_sandbox = lambda sandbox_id: SimpleNamespace(id=sandbox_id, template_id=template.id)
     service.template_service = SimpleNamespace(get_template=lambda template_id: template)
+    service.settings = SimpleNamespace(workspace=SimpleNamespace(enabled=True))
     service.expose_service = None
     service.gateway = SimpleNamespace(
         namespace="default",
@@ -137,6 +151,7 @@ def test_delete_sandbox_defaults_to_zero_grace_without_lifecycle() -> None:
         delete_deployment=lambda name, grace_period_seconds=0: deleted.update(
             {"name": name, "grace_period_seconds": grace_period_seconds}
         ),
+        delete_persistent_volume_claim=lambda _name: None,
     )
     service.webhook_dispatcher = SimpleNamespace(dispatch=lambda **kwargs: None)
 

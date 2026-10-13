@@ -94,6 +94,42 @@ class SandboxLifecycle(BaseModel):
         return self
 
 
+class WorkspaceConfigOverride(BaseModel):
+    """Sparse workspace policy that inherits unspecified values from its parent."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool | None = None
+    mount_path: str | None = None
+    size: str | None = None
+    storage_class: str | None = None
+
+    @field_validator("mount_path")
+    @classmethod
+    def mount_path_must_be_absolute(cls, value: str | None) -> str | None:
+        if value is not None and not value.startswith("/"):
+            raise ValueError("workspace.mount_path must be an absolute path")
+        return value.rstrip("/") if value and value != "/" else value
+
+    @field_validator("size")
+    @classmethod
+    def workspace_size_must_not_be_empty(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("workspace.size must not be empty")
+        return value.strip() if value else value
+
+
+class WorkspaceConfig(BaseModel):
+    """Fully resolved workspace policy recorded on each Sandbox Deployment."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+    mount_path: str
+    size: str
+    storage_class: str | None = None
+
+
 class Template(BaseModel):
     model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True)
 
@@ -108,6 +144,7 @@ class Template(BaseModel):
     memory_mb: int
     memory_request: int | None = None
     host_path_mounts: list[HostPathMount] = Field(default_factory=list)
+    workspace: WorkspaceConfigOverride | None = None
     ttl_seconds: int | None = None
     lifecycle: SandboxLifecycle | None = None
     metadata: dict[str, str] = Field(default_factory=dict)
@@ -122,6 +159,16 @@ class Template(BaseModel):
         return value or ""
 
 
+def validate_template_ttl_seconds(value: int | None) -> int | None:
+    if value is None or value == 0:
+        return value
+    if value < 0:
+        raise ValueError("ttl_seconds must be 0 or between 60 and 86400")
+    if value < 60 or value > 86400:
+        raise ValueError("ttl_seconds must be 0 or between 60 and 86400")
+    return value
+
+
 class CreateTemplateRequest(BaseModel):
     id: str = ""
     name: str
@@ -134,9 +181,12 @@ class CreateTemplateRequest(BaseModel):
     memory_mb: int = Field(ge=128, le=131072)
     memory_request: int | None = Field(default=None, ge=128, le=131072)
     host_path_mounts: list[HostPathMount] = Field(default_factory=list)
-    ttl_seconds: int | None = Field(default=None, ge=60, le=86400)
+    workspace: WorkspaceConfigOverride | None = None
+    ttl_seconds: int | None = None
     lifecycle: SandboxLifecycle | None = None
     metadata: dict[str, str] = Field(default_factory=dict)
+
+    _validate_ttl_seconds = field_validator("ttl_seconds")(validate_template_ttl_seconds)
 
 
 class UpdateTemplateRequest(BaseModel):
@@ -150,9 +200,12 @@ class UpdateTemplateRequest(BaseModel):
     memory_mb: int | None = Field(default=None, ge=128, le=131072)
     memory_request: int | None = Field(default=None, ge=128, le=131072)
     host_path_mounts: list[HostPathMount] | None = None
-    ttl_seconds: int | None = Field(default=None, ge=60, le=86400)
+    workspace: WorkspaceConfigOverride | None = None
+    ttl_seconds: int | None = None
     lifecycle: SandboxLifecycle | None = None
     metadata: dict[str, str] | None = None
+
+    _validate_ttl_seconds = field_validator("ttl_seconds")(validate_template_ttl_seconds)
 
 
 class TemplateListParams(BaseModel):
@@ -230,6 +283,7 @@ class AllocateSandboxRequest(BaseModel):
     template_id: str
     metadata: dict[str, str] = Field(default_factory=dict)
     env: list[str] = Field(default_factory=list)
+    workspace: WorkspaceConfigOverride | None = None
 
 
 class UpdateSandboxRequest(BaseModel):
@@ -250,6 +304,8 @@ class Sandbox(BaseModel):
     updated_at: datetime
     ttl_seconds: int = 0
     expires_at: datetime | None = None
+    locked: bool = False
+    workspace: WorkspaceConfig | None = None
 
 
 class SandboxResponse(BaseModel):
@@ -269,6 +325,8 @@ class SandboxResponse(BaseModel):
     ttl_seconds: int = 0
     expires_at: datetime | None = None
     time_remaining_seconds: int = 0
+    locked: bool = False
+    workspace: WorkspaceConfig | None = None
 
     @classmethod
     def from_sandbox(cls, sandbox: Sandbox, template: Template | None) -> "SandboxResponse":
@@ -293,6 +351,8 @@ class SandboxResponse(BaseModel):
             ttl_seconds=sandbox.ttl_seconds,
             expires_at=sandbox.expires_at,
             time_remaining_seconds=time_remaining,
+            locked=sandbox.locked,
+            workspace=sandbox.workspace,
         )
 
 
@@ -415,63 +475,3 @@ class ApiResponse(BaseModel):
     message: str | None = None
     data: Any | None = None
     error: str | None = None
-
-
-class FileKind(StrEnum):
-    FILE = "file"
-    DIRECTORY = "directory"
-
-
-class FileView(StrEnum):
-    AUTO = "auto"
-    CONTENT = "content"
-    LIST = "list"
-    TREE = "tree"
-
-
-class ExecCommandRequest(BaseModel):
-    command: list[str]
-    workdir: str | None = None
-    timeout: int = Field(default=30, ge=1, le=3600)
-
-    @field_validator("command")
-    @classmethod
-    def validate_command(cls, value: list[str]) -> list[str]:
-        if not value:
-            raise ValueError("command must not be empty")
-        return value
-
-
-class ExecCommandResult(BaseModel):
-    exit_code: int
-    stdout: str
-    stderr: str
-    execution_time_ms: int
-
-
-class FileNode(BaseModel):
-    name: str
-    path: str
-    is_dir: bool
-    size: int | None = None
-    children: list["FileNode"] = Field(default_factory=list)
-
-
-class FileListResponse(BaseModel):
-    path: str
-    is_dir: bool
-    entries: list[FileNode] = Field(default_factory=list)
-
-
-class FileWriteResult(BaseModel):
-    path: str
-    kind: FileKind
-    size: int
-
-
-class FileDeleteResult(BaseModel):
-    path: str
-    deleted: bool = True
-
-
-FileNode.model_rebuild()

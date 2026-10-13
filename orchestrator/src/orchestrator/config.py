@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 import tomllib
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class ServerConfig(BaseModel):
@@ -17,7 +17,9 @@ class ServerConfig(BaseModel):
 class KubernetesConfig(BaseModel):
     kubeconfig: str | None = None
     namespace: str = "default"
-    runtime_class: str | None = "kata-dragonball"
+    runtime_class: str | None = "kata-clh"
+    # Kept as a fallback for installations that have not moved storage settings
+    # into the workspace section yet.
     storage_class: str | None = None
     image_pull_secret: str | None = None
 
@@ -28,7 +30,49 @@ class SandboxConfig(BaseModel):
 
 
 class WorkspaceConfig(BaseModel):
+    enabled: bool = True
+    mount_path: str = "/workspace"
     default_size: str = "1Gi"
+    storage_class: str | None = None
+
+    @field_validator("mount_path")
+    @classmethod
+    def mount_path_must_be_absolute(cls, value: str) -> str:
+        if not value.startswith("/"):
+            raise ValueError("workspace.mount_path must be an absolute path")
+        return value.rstrip("/") or "/"
+
+
+class EnvdConfig(BaseModel):
+    enabled: bool = False
+    version: str = "0.1.0"
+    host_binary_path: str = "/opt/litterbox/bin/sandbox-agent"
+    container_binary_path: str = "/opt/litterbox/envd/sandbox-agent"
+    port: int = Field(default=49983, ge=1, le=65535)
+    connect_timeout_seconds: float = Field(default=3.0, gt=0)
+    pod_ip_cache_ttl_seconds: float = Field(default=5.0, ge=0)
+
+    @field_validator("host_binary_path", "container_binary_path")
+    @classmethod
+    def binary_paths_must_be_absolute(cls, value: str) -> str:
+        if not Path(value).is_absolute():
+            raise ValueError("envd binary paths must be absolute")
+        return value
+
+    @field_validator("version")
+    @classmethod
+    def version_must_not_be_empty(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("envd.version must not be empty")
+        return value
+
+
+class E2BConfig(BaseModel):
+    enabled: bool = False
+    api_key: str = ""
+    domain: str = "runlet.cn"
+    envd_version: str = "0.1.0"
 
 
 class TTLConfig(BaseModel):
@@ -60,6 +104,8 @@ class Settings(BaseModel):
     kubernetes: KubernetesConfig = Field(default_factory=KubernetesConfig)
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
     workspace: WorkspaceConfig = Field(default_factory=WorkspaceConfig)
+    envd: EnvdConfig = Field(default_factory=EnvdConfig)
+    e2b: E2BConfig = Field(default_factory=E2BConfig)
     ttl: TTLConfig = Field(default_factory=TTLConfig)
     webhook: WebhookConfig = Field(default_factory=WebhookConfig)
     celery: CeleryConfig = Field(default_factory=CeleryConfig)

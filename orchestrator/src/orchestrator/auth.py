@@ -30,17 +30,18 @@ def is_http_authorized(expected_token: str, authorization_header: str | None) ->
     return secrets.compare_digest(provided, configured)
 
 
-def is_websocket_authorized(
-    expected_token: str,
+def is_e2b_authorized(
+    expected_key: str,
+    api_key_header: str | None,
     authorization_header: str | None,
-    query_token: str | None,
+    access_token_header: str | None = None,
 ) -> bool:
-    configured = normalize_configured_token(expected_token)
+    configured = normalize_configured_token(expected_key)
     if not configured:
         return True
-    provided = extract_bearer_token(authorization_header)
-    if not provided:
-        provided = normalize_configured_token(query_token) or None
-    if not provided:
-        return False
-    return secrets.compare_digest(provided, configured)
+    provided = (
+        (api_key_header or "").strip()
+        or (access_token_header or "").strip()
+        or extract_bearer_token(authorization_header)
+    )
+    return bool(provided) and secrets.compare_digest(provided, configured)

@@ -76,6 +76,11 @@ configuration-fc.toml
 litterbox-saas/
 litterbox-kata.zip
 front/
+# External reference project (not part of litterbox)
+AgentENV-main/
+# Compiled sandbox-agent binaries (built via Makefile, not source)
+sandbox-agent-go/bin/
+sandbox-image/bin/
 # Craft Agent / IDE tool dirs
 .omx/
 .baidu-cc/

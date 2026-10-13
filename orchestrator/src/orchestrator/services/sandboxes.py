@@ -10,8 +10,6 @@ from kubernetes.client import ApiException
 from orchestrator.config import Settings
 from orchestrator.domain.models import (
     AllocateSandboxRequest,
-    ExecCommandRequest,
-    ExecCommandResult,
     PoolState,
     QueryOptions,
     Sandbox,
@@ -21,12 +19,18 @@ from orchestrator.domain.models import (
     Template,
     UpdateSandboxRequest,
     WebhookEvent,
+    WorkspaceConfig,
+    WorkspaceConfigOverride,
 )
 from orchestrator.infra.kubernetes import KubernetesGateway
 from orchestrator.infra.ttl_queue import TTLEntry, TTLQueueRepository
 from orchestrator.services.templates import TemplateService
 from orchestrator.services.webhooks import WebhookDispatcher
 from orchestrator.utils import is_valid_label_part, parse_env_list, short_id, utcnow
+
+
+class SandboxResumeLockedError(RuntimeError):
+    pass
 
 
 class SandboxService:
@@ -63,12 +67,14 @@ class SandboxService:
         wait_ready: bool = True,
         dispatch_events: bool = True,
         ttl_seconds: int | None = None,
+        workspace: WorkspaceConfigOverride | None = None,
     ) -> SandboxResponse:
         from orchestrator.services.metrics import sandbox_metrics  # 延迟导入，避免循环
 
         metadata = metadata or {}
         template = self.template_service.get_template(template_id)
         sandbox_id = short_id()
+        resolved_workspace = self._resolve_workspace(template, workspace)
         deployment = self._build_deployment(
             sandbox_id=sandbox_id,
             template=template,
@@ -77,13 +83,20 @@ class SandboxService:
             env=env,
             pool_state=pool_state,
             ttl_seconds=ttl_seconds,
+            workspace=resolved_workspace,
         )
-        workspace_claim = self._build_workspace_claim(sandbox_id)
-        self.gateway.create_persistent_volume_claim(workspace_claim)
+        workspace_claim = (
+            self._build_workspace_claim(sandbox_id, resolved_workspace)
+            if resolved_workspace.enabled
+            else None
+        )
+        if workspace_claim is not None:
+            self.gateway.create_persistent_volume_claim(workspace_claim)
         try:
             self.gateway.create_deployment(deployment)
         except Exception:
-            self.gateway.delete_persistent_volume_claim(workspace_claim.metadata.name)
+            if workspace_claim is not None:
+                self.gateway.delete_persistent_volume_claim(workspace_claim.metadata.name)
             raise
         self._sync_ttl_schedule(sandbox_id, deployment.metadata.annotations or {})
         pod = None
@@ -262,11 +275,92 @@ class SandboxService:
             deletion_reason=deletion_reason,
         )
         self.gateway.delete_deployment(sandbox_id, grace_period_seconds=grace_period_seconds)
+        workspace = getattr(sandbox, "workspace", None)
+        if workspace.enabled if workspace is not None else self.settings.workspace.enabled:
+            self.gateway.delete_persistent_volume_claim(self._workspace_claim_name(sandbox_id))
 
-    def exec_command(self, sandbox_id: str, command: list[str]) -> ExecCommandResult:
-        from orchestrator.services.workspace import WorkspaceService
-        request = ExecCommandRequest(command=command)
-        return WorkspaceService(self.gateway).exec_command(sandbox_id, request)
+    def suspend_sandbox(self, sandbox_id: str, *, ttl_expired: bool = False) -> SandboxResponse:
+        deployment = self.gateway.read_deployment(sandbox_id)
+        annotations = dict(deployment.metadata.annotations or {})
+
+        if ttl_expired:
+            annotations_to_remove = tuple(
+                key
+                for key in (
+                    "litterbox.io/ttl-token",
+                    "litterbox.io/expires-at",
+                    "litterbox.io/last-ttl-renewal",
+                )
+                if key in annotations
+            )
+            ttl_token = annotations.pop("litterbox.io/ttl-token", "")
+            annotations.pop("litterbox.io/expires-at", None)
+            annotations.pop("litterbox.io/last-ttl-renewal", None)
+            annotations["litterbox.io/ttl-suspended-at"] = utcnow().isoformat()
+            self._patch_deployment_metadata(
+                sandbox_id,
+                annotations=annotations,
+                annotations_to_remove=annotations_to_remove,
+            )
+            if ttl_token:
+                self.ttl_queue.unschedule(TTLEntry(sandbox_id=sandbox_id, ttl_token=ttl_token))
+
+        if (deployment.spec.replicas or 0) != 0:
+            self.gateway.scale_deployment(sandbox_id, 0)
+        return self.get_sandbox(sandbox_id)
+
+    def resume_sandbox(self, sandbox_id: str) -> SandboxResponse:
+        deployment = self.gateway.read_deployment(sandbox_id)
+        annotations = dict(deployment.metadata.annotations or {})
+        if annotations.get("litterbox.io/resume-locked") == "true":
+            raise SandboxResumeLockedError(f"sandbox {sandbox_id} is locked and cannot be resumed")
+        if "litterbox.io/ttl-suspended-at" in annotations:
+            annotations_to_remove = ("litterbox.io/ttl-suspended-at",)
+            previous_token = annotations.get("litterbox.io/ttl-token", "")
+            ttl_seconds = int(annotations.get("litterbox.io/ttl-seconds", "0"))
+            if ttl_seconds > 0:
+                self._apply_ttl_annotations(annotations, ttl_seconds)
+            else:
+                annotations.pop("litterbox.io/ttl-suspended-at", None)
+            self._patch_deployment_metadata(
+                sandbox_id,
+                annotations=annotations,
+                annotations_to_remove=annotations_to_remove,
+            )
+            self._sync_ttl_schedule(sandbox_id, annotations, previous_token=previous_token)
+
+        if (deployment.spec.replicas or 0) == 0:
+            self.gateway.scale_deployment(sandbox_id, 1)
+            self.gateway.wait_for_pod_ready(f"app={sandbox_id},component=sandbox")
+        return self.get_sandbox(sandbox_id)
+
+    def lock_sandbox(self, sandbox_id: str) -> SandboxResponse:
+        deployment = self.gateway.read_deployment(sandbox_id)
+        annotations = dict(deployment.metadata.annotations or {})
+        if annotations.get("litterbox.io/resume-locked") != "true":
+            annotations["litterbox.io/resume-locked"] = "true"
+            annotations["litterbox.io/resume-locked-at"] = utcnow().isoformat()
+            self._patch_deployment_metadata(sandbox_id, annotations=annotations)
+        return self.get_sandbox(sandbox_id)
+
+    def unlock_sandbox(self, sandbox_id: str) -> SandboxResponse:
+        deployment = self.gateway.read_deployment(sandbox_id)
+        annotations = dict(deployment.metadata.annotations or {})
+        annotations_to_remove = tuple(
+            key
+            for key in (
+                "litterbox.io/resume-locked",
+                "litterbox.io/resume-locked-at",
+            )
+            if annotations.pop(key, None) is not None
+        )
+        if annotations_to_remove:
+            self._patch_deployment_metadata(
+                sandbox_id,
+                annotations=annotations,
+                annotations_to_remove=annotations_to_remove,
+            )
+        return self.get_sandbox(sandbox_id)
 
     def update_ttl(self, sandbox_id: str, ttl_seconds: int) -> None:
         deployment = self.gateway.read_deployment(sandbox_id)
@@ -290,16 +384,16 @@ class SandboxService:
         self._sync_ttl_schedule(sandbox_id, annotations, previous_token=previous_token)
 
     def cleanup_expired(self) -> int:
-        deleted = 0
+        suspended = 0
         for deployment in self.gateway.list_deployments("component=sandbox"):
             annotations = deployment.metadata.annotations or {}
             expires_at = annotations.get("litterbox.io/expires-at")
             if not expires_at:
                 continue
             if datetime.fromisoformat(expires_at) <= utcnow():
-                self.delete_sandbox(deployment.metadata.name, deletion_reason="ttl_expired")
-                deleted += 1
-        return deleted
+                self.suspend_sandbox(deployment.metadata.name, ttl_expired=True)
+                suspended += 1
+        return suspended
 
     def delete_if_ttl_due(self, sandbox_id: str, ttl_token: str) -> bool:
         try:
@@ -314,14 +408,18 @@ class SandboxService:
         expires_at = annotations.get("litterbox.io/expires-at")
         if not expires_at or datetime.fromisoformat(expires_at) > utcnow():
             return False
-        self.delete_sandbox(sandbox_id, deletion_reason="ttl_expired")
+        self.suspend_sandbox(sandbox_id, ttl_expired=True)
         return True
 
     @staticmethod
     def _workspace_claim_name(sandbox_id: str) -> str:
         return f"workspace-{sandbox_id}"
 
-    def _build_workspace_claim(self, sandbox_id: str) -> client.V1PersistentVolumeClaim:
+    def _build_workspace_claim(
+        self,
+        sandbox_id: str,
+        workspace: WorkspaceConfig,
+    ) -> client.V1PersistentVolumeClaim:
         return client.V1PersistentVolumeClaim(
             metadata=client.V1ObjectMeta(
                 name=self._workspace_claim_name(sandbox_id),
@@ -335,12 +433,30 @@ class SandboxService:
             spec=client.V1PersistentVolumeClaimSpec(
                 access_modes=["ReadWriteOnce"],
                 volume_mode="Filesystem",
-                storage_class_name=self.settings.kubernetes.storage_class or None,
+                storage_class_name=workspace.storage_class,
                 resources=client.V1ResourceRequirements(
-                    requests={"storage": self.settings.workspace.default_size},
+                    requests={"storage": workspace.size},
                 ),
             ),
         )
+
+    def _resolve_workspace(
+        self,
+        template: Template,
+        override: WorkspaceConfigOverride | None,
+    ) -> WorkspaceConfig:
+        resolved: dict[str, str | bool | None] = {
+            "enabled": self.settings.workspace.enabled,
+            "mount_path": self.settings.workspace.mount_path,
+            "size": self.settings.workspace.default_size,
+            "storage_class": (
+                self.settings.workspace.storage_class or self.settings.kubernetes.storage_class or None
+            ),
+        }
+        for policy in (template.workspace, override):
+            if policy is not None:
+                resolved.update(policy.model_dump(exclude_none=True))
+        return WorkspaceConfig.model_validate(resolved)
 
     def _build_deployment(
         self,
@@ -352,6 +468,7 @@ class SandboxService:
         env: list[str] | None,
         pool_state: str,
         ttl_seconds: int | None,
+        workspace: WorkspaceConfig | None = None,
     ) -> client.V1Deployment:
         labels = {
             "app": sandbox_id,
@@ -369,6 +486,8 @@ class SandboxService:
             "litterbox.io/template-id": template.id,
             "litterbox.io/created-at": utcnow().isoformat(),
         }
+        workspace = workspace or self._resolve_workspace(template, None)
+        annotations["litterbox.io/workspace-config"] = workspace.model_dump_json()
         if name:
             annotations["litterbox.io/allocated-name"] = name
         for key, value in metadata.items():
@@ -386,16 +505,41 @@ class SandboxService:
         for key, value in parse_env_list(merged_env_items):
             merged_env_map[key] = value
         container_env = [client.V1EnvVar(name=key, value=value) for key, value in merged_env_map.items()]
-        workspace_claim_name = self._workspace_claim_name(sandbox_id)
-        volume_mounts = [client.V1VolumeMount(name="workspace", mount_path="/workspace")]
-        volumes = [
-            client.V1Volume(
-                name="workspace",
-                persistent_volume_claim=client.V1PersistentVolumeClaimVolumeSource(
-                    claim_name=workspace_claim_name,
-                ),
+        volume_mounts: list[client.V1VolumeMount] = []
+        volumes: list[client.V1Volume] = []
+        container_ports: list[client.V1ContainerPort] = []
+        if workspace.enabled:
+            workspace_mount = client.V1VolumeMount(name="workspace", mount_path=workspace.mount_path)
+            volume_mounts.append(workspace_mount)
+            volumes.append(
+                client.V1Volume(
+                    name="workspace",
+                    persistent_volume_claim=client.V1PersistentVolumeClaimVolumeSource(
+                        claim_name=self._workspace_claim_name(sandbox_id),
+                    ),
+                )
             )
-        ]
+        if self.settings.envd.enabled:
+            annotations["litterbox.io/envd-version"] = self.settings.envd.version
+            volumes.append(
+                client.V1Volume(
+                    name="envd",
+                    host_path=client.V1HostPathVolumeSource(
+                        path=self.settings.envd.host_binary_path,
+                        type="File",
+                    ),
+                )
+            )
+            volume_mounts.append(
+                client.V1VolumeMount(
+                    name="envd",
+                    mount_path=self.settings.envd.container_binary_path,
+                    read_only=True,
+                )
+            )
+            container_ports.append(
+                client.V1ContainerPort(name="envd", container_port=self.settings.envd.port)
+            )
         for index, mount in enumerate(template.host_path_mounts):
             volume_name = f"host-mount-{index}"
             volumes.append(
@@ -428,6 +572,11 @@ class SandboxService:
         lifecycle = self._build_container_lifecycle(template)
         termination_grace_period_seconds = self._termination_grace_period_seconds(template)
         pod_spec = client.V1PodSpec(
+            node_selector=(
+                {"litterbox.io/envd-version": self.settings.envd.version}
+                if self.settings.envd.enabled
+                else None
+            ),
             runtime_class_name=(
                 self.settings.kubernetes.runtime_class
                 if self.settings.kubernetes.runtime_class in self.gateway.available_runtime_classes
@@ -449,12 +598,13 @@ class SandboxService:
                     command=shlex.split(template.command) if template.command else None,
                     env=container_env or None,
                     lifecycle=lifecycle,
+                    ports=container_ports or None,
                     resources=resources,
                     volume_mounts=volume_mounts or None,
                     stdin=True,
                     stdin_once=False,
                     tty=True,
-                    image_pull_policy="IfNotPresent",
+                    image_pull_policy="Always",
                 )
             ],
         )
@@ -475,23 +625,38 @@ class SandboxService:
             ),
         )
 
-    @staticmethod
-    def _build_container_lifecycle(template: Template) -> client.V1Lifecycle | None:
-        if template.lifecycle is None:
-            return None
-
+    def _build_container_lifecycle(self, template: Template) -> client.V1Lifecycle | None:
         post_start = None
-        if template.lifecycle.post_start is not None:
+        if self.settings.envd.enabled:
+            if template.lifecycle is not None and template.lifecycle.post_start is not None:
+                raise ValueError("template postStart conflicts with envd injection")
+            post_start = client.V1LifecycleHandler(
+                _exec=client.V1ExecAction(
+                    command=[
+                        self.settings.envd.container_binary_path,
+                        "daemon",
+                        "--host",
+                        "0.0.0.0",
+                        "--port",
+                        str(self.settings.envd.port),
+                        "--filesystem-root",
+                        "/",
+                    ]
+                )
+            )
+        elif template.lifecycle is not None and template.lifecycle.post_start is not None:
             post_start = client.V1LifecycleHandler(
                 _exec=client.V1ExecAction(command=template.lifecycle.post_start.exec.command)
             )
 
         pre_stop = None
-        if template.lifecycle.pre_stop is not None:
+        if template.lifecycle is not None and template.lifecycle.pre_stop is not None:
             pre_stop = client.V1LifecycleHandler(
                 _exec=client.V1ExecAction(command=template.lifecycle.pre_stop.exec.command)
             )
 
+        if post_start is None and pre_stop is None:
+            return None
         return client.V1Lifecycle(post_start=post_start, pre_stop=pre_stop)
 
     @staticmethod
@@ -513,6 +678,13 @@ class SandboxService:
             allocated_at = datetime.fromisoformat(annotations["litterbox.io/allocated-at"])
         updated_at_raw = annotations.get("litterbox.io/updated-at")
         updated_at = datetime.fromisoformat(updated_at_raw) if updated_at_raw else deployment.metadata.creation_timestamp
+        workspace = None
+        raw_workspace = annotations.get("litterbox.io/workspace-config")
+        if raw_workspace:
+            try:
+                workspace = WorkspaceConfig.model_validate_json(raw_workspace)
+            except ValueError:
+                pass
         return Sandbox(
             id=deployment.metadata.name,
             name=name,
@@ -526,6 +698,8 @@ class SandboxService:
             updated_at=updated_at,
             ttl_seconds=ttl_seconds,
             expires_at=expires_at,
+            locked=annotations.get("litterbox.io/resume-locked") == "true",
+            workspace=workspace,
         )
 
     @staticmethod
@@ -578,6 +752,7 @@ class SandboxService:
         *,
         labels: dict[str, str] | None = None,
         annotations: dict[str, str] | None = None,
+        annotations_to_remove: tuple[str, ...] = (),
         pod_labels: dict[str, str] | None = None,
         pod_annotations: dict[str, str] | None = None,
     ) -> None:
@@ -589,7 +764,12 @@ class SandboxService:
             if annotations is not None:
                 # Stamp the real modification time whenever annotations are updated.
                 annotations["litterbox.io/updated-at"] = utcnow().isoformat()
-                metadata["annotations"] = annotations
+                annotation_patch: dict[str, str | None] = dict(annotations)
+                # Merge patches retain omitted map entries. Explicit null values
+                # are required to remove annotations from the live object.
+                for key in annotations_to_remove:
+                    annotation_patch[key] = None
+                metadata["annotations"] = annotation_patch
             body["metadata"] = metadata
         if pod_labels is not None or pod_annotations is not None:
             template_metadata: dict[str, object] = {}
@@ -622,6 +802,7 @@ class SandboxService:
         ttl_token: str,
         include_ttl: bool = True,
     ) -> None:
+        annotations.pop("litterbox.io/ttl-suspended-at", None)
         if include_ttl:
             annotations["litterbox.io/ttl-seconds"] = str(ttl_seconds)
         annotations["litterbox.io/expires-at"] = datetime.fromtimestamp(utcnow().timestamp() + ttl_seconds, tz=UTC).isoformat()
@@ -629,7 +810,13 @@ class SandboxService:
 
     @staticmethod
     def _clear_ttl_annotations(annotations: dict[str, str]) -> None:
-        for key in ("litterbox.io/ttl-seconds", "litterbox.io/expires-at", "litterbox.io/ttl-token", "litterbox.io/last-ttl-renewal"):
+        for key in (
+            "litterbox.io/ttl-seconds",
+            "litterbox.io/expires-at",
+            "litterbox.io/ttl-token",
+            "litterbox.io/last-ttl-renewal",
+            "litterbox.io/ttl-suspended-at",
+        ):
             annotations.pop(key, None)
 
     def _sync_ttl_schedule(

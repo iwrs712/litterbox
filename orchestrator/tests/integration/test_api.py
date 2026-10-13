@@ -410,67 +410,12 @@ def test_sandbox_status_endpoint(client, created_sandbox):
     assert response.json()["data"]["status"] == "running"
 
 
-def test_exec_endpoint(client, created_sandbox):
-    response = client.post(f"/api/v1/sandboxes/{created_sandbox}/exec", json={"command": ["echo", "hello"]})
-    assert response.status_code == 200
-    assert response.json()["data"]["exit_code"] == 0
-    assert response.json()["data"]["stdout"].strip() == "hello"
+def test_envd_health_endpoint_when_injection_is_enabled(client, created_sandbox):
+    if not client.app.state.container.settings.envd.enabled:
+        pytest.skip("envd injection is disabled")
 
-
-def test_files_endpoints(client, created_sandbox):
-    create_dir = client.put(
-        f"/api/v1/sandboxes/{created_sandbox}/files",
-        params={"path": "/workspace/test-dir", "kind": "directory"},
-    )
-    assert create_dir.status_code == 200, create_dir.text
-
-    write_file = client.put(
-        f"/api/v1/sandboxes/{created_sandbox}/files",
-        params={"path": "/workspace/test-dir/hello.txt", "kind": "file"},
-        content=b"hello file\n",
-        headers={"Content-Type": "text/plain; charset=utf-8"},
-    )
-    assert write_file.status_code == 200, write_file.text
-    assert write_file.json()["data"]["size"] == len(b"hello file\n")
-
-    read_file = client.get(
-        f"/api/v1/sandboxes/{created_sandbox}/files",
-        params={"path": "/workspace/test-dir/hello.txt", "view": "content"},
-    )
-    assert read_file.status_code == 200, read_file.text
-    assert read_file.text == "hello file\n"
-
-    tree = client.get(
-        f"/api/v1/sandboxes/{created_sandbox}/files",
-        params={"path": "/workspace", "view": "tree"},
-    )
-    assert tree.status_code == 200, tree.text
-    root = tree.json()["data"]
-    test_dir = next(item for item in root["children"] if item["path"] == "/workspace/test-dir")
-    assert test_dir["is_dir"] is True
-    assert any(child["path"] == "/workspace/test-dir/hello.txt" for child in test_dir["children"])
-
-    delete_file = client.delete(
-        f"/api/v1/sandboxes/{created_sandbox}/files",
-        params={"path": "/workspace/test-dir/hello.txt", "recursive": "false"},
-    )
-    assert delete_file.status_code == 200, delete_file.text
-
-    delete_dir = client.delete(
-        f"/api/v1/sandboxes/{created_sandbox}/files",
-        params={"path": "/workspace/test-dir", "recursive": "false"},
-    )
-    assert delete_dir.status_code == 200, delete_dir.text
-
-
-def test_terminal_websocket_endpoint(client, created_sandbox):
-    with client.websocket_connect(f"/api/v1/sandboxes/{created_sandbox}/terminal") as websocket:
-        websocket.send_json({"type": "stdin", "data": "echo ws-ok\n"})
-        data = wait_until(lambda: websocket.receive_json(), timeout=20, interval=0.1)
-        assert data["type"] in {"stdout", "stderr"}
-        while "ws-ok" not in data["data"]:
-            data = websocket.receive_json()
-        assert "ws-ok" in data["data"]
+    response = client.get(f"/api/v1/sandboxes/{created_sandbox}/envd/health")
+    assert response.status_code == 200, response.text
 
 
 def test_ttl_endpoints(client, created_sandbox):

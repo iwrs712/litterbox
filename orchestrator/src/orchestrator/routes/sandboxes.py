@@ -2,20 +2,18 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi import APIRouter, Depends, Query
+from fastapi.responses import JSONResponse
 
 from orchestrator.container import Container
 from orchestrator.deps import get_container
 from orchestrator.domain.models import (
     AllocateSandboxRequest,
-    ExecCommandRequest,
-    FileKind,
-    FileView,
     QueryOptions,
     UpdateSandboxRequest,
 )
 from orchestrator.responses import error, ok
+from orchestrator.services.sandboxes import SandboxResumeLockedError
 from orchestrator.utils import validate_metadata_key
 
 router = APIRouter(prefix="/api/v1/sandboxes", tags=["sandboxes"])
@@ -117,71 +115,52 @@ def delete_sandbox(
         return error(str(exc), 500)
 
 
-@router.post("/{sandbox_id}/exec")
-def exec_command(
+@router.post("/{sandbox_id}/suspend")
+def suspend_sandbox(
     sandbox_id: str,
-    request: ExecCommandRequest,
     container: Annotated[Container, Depends(get_container)],
 ) -> JSONResponse:
     try:
-        result = container.workspace_service.exec_command(sandbox_id, request)
-        return ok(data=result)
-    except ValueError as exc:
-        return error(str(exc), 400)
+        sandbox = container.sandbox_service.suspend_sandbox(sandbox_id)
+        return ok(data=sandbox, message="Sandbox suspended successfully")
     except Exception as exc:  # noqa: BLE001
         return error(str(exc), 500)
 
 
-@router.get("/{sandbox_id}/files")
-def get_files(
+@router.post("/{sandbox_id}/resume")
+def resume_sandbox(
     sandbox_id: str,
-    path: str = Query(default="/workspace"),
-    view: FileView = Query(default=FileView.AUTO),
-    container: Annotated[Container, Depends(get_container)] = None,
-):
+    container: Annotated[Container, Depends(get_container)],
+) -> JSONResponse:
     try:
-        media_type, data = container.workspace_service.get_path(sandbox_id, path, view)
-        if isinstance(data, bytes):
-            return Response(content=data, media_type=media_type, headers={"X-Litterbox-Path": path})
-        return ok(data=data)
-    except FileNotFoundError:
-        return error("Path not found", 404)
-    except ValueError as exc:
-        return error(str(exc), 400)
+        sandbox = container.sandbox_service.resume_sandbox(sandbox_id)
+        return ok(data=sandbox, message="Sandbox resumed successfully")
+    except SandboxResumeLockedError as exc:
+        return error(str(exc), 409)
     except Exception as exc:  # noqa: BLE001
         return error(str(exc), 500)
 
 
-@router.put("/{sandbox_id}/files")
-async def put_files(
+@router.post("/{sandbox_id}/lock")
+def lock_sandbox(
     sandbox_id: str,
-    request: Request,
-    path: str = Query(...),
-    kind: FileKind = Query(default=FileKind.FILE),
-    container: Annotated[Container, Depends(get_container)] = None,
-):
+    container: Annotated[Container, Depends(get_container)],
+) -> JSONResponse:
     try:
-        payload = await request.body()
-        result = container.workspace_service.put_path(sandbox_id, path, kind, payload)
-        return ok(data=result)
-    except ValueError as exc:
-        return error(str(exc), 400)
+        sandbox = container.sandbox_service.lock_sandbox(sandbox_id)
+        return ok(data=sandbox, message="Sandbox locked successfully")
     except Exception as exc:  # noqa: BLE001
         return error(str(exc), 500)
 
 
-@router.delete("/{sandbox_id}/files")
-def delete_files(
+@router.post("/{sandbox_id}/unlock")
+def unlock_sandbox(
     sandbox_id: str,
-    path: str = Query(...),
-    recursive: bool = Query(default=False),
-    container: Annotated[Container, Depends(get_container)] = None,
-):
+    container: Annotated[Container, Depends(get_container)],
+) -> JSONResponse:
     try:
-        result = container.workspace_service.delete_path(sandbox_id, path, recursive)
-        return ok(data=result)
-    except ValueError as exc:
-        return error(str(exc), 400)
+        sandbox = container.sandbox_service.unlock_sandbox(sandbox_id)
+        return ok(data=sandbox, message="Sandbox unlocked successfully")
     except Exception as exc:  # noqa: BLE001
         return error(str(exc), 500)
 

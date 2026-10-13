@@ -45,7 +45,9 @@ class TemplateService:
 
     def update_template(self, template_id: str, req: UpdateTemplateRequest) -> Template:
         template = self.repository.get(template_id)
-        updates = req.model_dump(exclude_none=True)
+        # Preserve an explicit null so clients can clear an inherited policy,
+        # while omitted fields remain untouched.
+        updates = req.model_dump(exclude_unset=True)
         updated = template.model_copy(update={**updates, "updated_at": utcnow()})
         return self.repository.save(updated)
 

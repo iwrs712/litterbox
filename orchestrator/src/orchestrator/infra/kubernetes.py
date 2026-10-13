@@ -11,9 +11,16 @@ from typing import Any
 
 from kubernetes import client, config
 from kubernetes.client import ApiException
-from kubernetes.stream import stream
 
 from orchestrator.config import Settings
+
+
+class SandboxNotRunningError(RuntimeError):
+    pass
+
+
+class SandboxPodAddressUnavailableError(RuntimeError):
+    pass
 
 
 class KubernetesGateway:
@@ -165,114 +172,32 @@ class KubernetesGateway:
                 statuses = pod.status.container_statuses or []
                 if statuses and all(status.ready for status in statuses):
                     return pod
-            time.sleep(1)
+            time.sleep(0.1)
         raise TimeoutError(f"timed out waiting for pod ready: {label_selector} ({last_error})")
 
     def get_first_running_pod(self, sandbox_id: str) -> client.V1Pod:
         for pod in self.list_pods(f"app={sandbox_id},component=sandbox"):
             if pod.status.phase == "Running":
                 return pod
-        raise RuntimeError(f"no running pods found for sandbox {sandbox_id}")
+        raise SandboxNotRunningError(f"sandbox {sandbox_id} is not running")
 
-    @staticmethod
-    def _container_name(pod: client.V1Pod) -> str | None:
-        containers = pod.spec.containers or []
-        if len(containers) <= 1:
-            return None
-        return containers[0].name
-
-    def _exec_stream(self, pod: client.V1Pod, *, command: list[str], stdin: bool, tty: bool):
-        kwargs = {
-            "command": command,
-            "stderr": True,
-            "stdin": stdin,
-            "stdout": True,
-            "tty": tty,
-            "_preload_content": False,
-        }
-        if container_name := self._container_name(pod):
-            kwargs["container"] = container_name
-        # `stream()` swaps the bound ApiClient request handler to websocket mode.
-        # Keep exec/terminal traffic on a dedicated CoreV1Api so regular queries
-        # on `self.core` continue to use the normal HTTP transport.
-        exec_core = self._build_core_api()
-        return stream(
-            exec_core.connect_get_namespaced_pod_exec,
-            pod.metadata.name,
-            self.namespace,
-            **kwargs,
-        )
-
-    @staticmethod
-    def _collect_exec_response(response, timeout_seconds: int) -> tuple[str, str]:
-        deadline = time.time() + timeout_seconds
-        stdout_parts: list[str] = []
-        stderr_parts: list[str] = []
-        while response.is_open():
-            response.update(timeout=1)
-            if response.peek_stdout():
-                stdout_parts.append(response.read_stdout())
-            if response.peek_stderr():
-                stderr_parts.append(response.read_stderr())
-            if time.time() > deadline:
-                response.close()
-                raise TimeoutError(f"exec timed out after {timeout_seconds}s")
-        response.close()
-        return "".join(stdout_parts), "".join(stderr_parts)
-
-    def exec_command(
-        self,
-        sandbox_id: str,
-        command: list[str],
-        tty: bool = False,
-        timeout_seconds: int = 60,
-    ) -> tuple[str, str]:
-        pod = self.get_first_running_pod(sandbox_id)
-        response = self._exec_stream(pod, command=command, stdin=False, tty=tty)
-        return self._collect_exec_response(response, timeout_seconds)
-
-    def exec_shell(self, sandbox_id: str, script: str, timeout_seconds: int = 60) -> tuple[str, str]:
-        return self.exec_command(
-            sandbox_id,
-            ["/bin/sh", "-lc", script],
-            timeout_seconds=timeout_seconds,
-        )
-
-    def open_shell(self, sandbox_id: str):
-        pod = self.get_first_running_pod(sandbox_id)
-        return self._exec_stream(
-            pod,
-            command=[
-                "/bin/sh",
-                "-lc",
-                "if command -v bash >/dev/null 2>&1; then exec bash -il; else exec sh -il; fi",
-            ],
-            stdin=True,
-            tty=True,
-        )
-
-    def open_acp(self, sandbox_id: str):
-        pod = self.get_first_running_pod(sandbox_id)
-        return self._exec_stream(
-            pod,
-            command=[
-                "/bin/sh",
-                "-lc",
-                (
-                    "cd /workspace || exit 1; "
-                    "if command -v claude-agent-acp >/dev/null 2>&1; then "
-                    "exec claude-agent-acp; "
-                    "elif command -v claude-code-acp >/dev/null 2>&1; then "
-                    "exec claude-code-acp; "
-                    "else "
-                    "echo 'acp binary not found: claude-agent-acp/claude-code-acp' >&2; "
-                    "exit 127; "
-                    "fi"
-                ),
-            ],
-            stdin=True,
-            tty=False,
-        )
+    def get_ready_pod_ip(self, sandbox_id: str) -> str:
+        ready_pod_without_ip = False
+        for pod in self.list_pods(f"app={sandbox_id},component=sandbox"):
+            if pod.metadata.deletion_timestamp is not None or pod.status.phase != "Running":
+                continue
+            statuses = pod.status.container_statuses or []
+            if not statuses or not all(status.ready for status in statuses):
+                continue
+            if not pod.status.pod_ip:
+                ready_pod_without_ip = True
+                continue
+            return pod.status.pod_ip
+        if ready_pod_without_ip:
+            raise SandboxPodAddressUnavailableError(
+                f"sandbox {sandbox_id} running Pod has no IP"
+            )
+        raise SandboxNotRunningError(f"sandbox {sandbox_id} is not running")
 
     def create_service(self, service: client.V1Service) -> client.V1Service:
         return self.core.create_namespaced_service(self.namespace, service)

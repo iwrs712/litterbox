@@ -88,7 +88,9 @@ class PoolService:
 
     def _pool_ttl_seconds(self, template_id: str) -> int:
         template = self.sandbox_service.get_template(template_id)
-        return template.ttl_seconds or self.sandbox_service.settings.ttl.default_ttl_seconds
+        if template.ttl_seconds is None:
+            return self.sandbox_service.settings.ttl.default_ttl_seconds
+        return template.ttl_seconds
 
     def _deactivate_pool_sandboxes(self, template_id: str) -> None:
         sandboxes = self.sandbox_service.list_sandboxes(
@@ -193,6 +195,10 @@ class PoolService:
             raise ValueError(
                 "env override is not supported when a warm pool is enabled for this template"
             )
+        if req.workspace is not None and pool and pool.enabled:
+            raise ValueError(
+                "workspace override is not supported when a warm pool is enabled for this template"
+            )
         if pool and pool.enabled:
             lock_value = self._acquire_claim_lock(req.template_id)
             if lock_value is None:
@@ -242,6 +248,7 @@ class PoolService:
             wait_ready=True,
             dispatch_events=True,
             ttl_seconds=self._pool_ttl_seconds(req.template_id),
+            workspace=req.workspace,
         )
         if pool and pool.enabled:
             # Pool miss: we just bypassed the pool entirely.  Trigger reconcile

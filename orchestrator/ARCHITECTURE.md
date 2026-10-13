@@ -272,6 +272,8 @@ POST /sandboxes
 - optional runtime class
 - optional image pull secret
 - workspace PVC mounted at `/workspace`
+- optional envd binary installed by a node DaemonSet, mounted read-only from
+  `/opt/litterbox/bin/sandbox-agent`, and started with `postStart`
 - optional host-path volume mounts
 - labels/annotations carrying logical metadata
 
@@ -446,12 +448,12 @@ These are visible in the current code and matter for maintainers:
 - API error handling is mostly broad `except Exception` -> `500`, which keeps handlers short but loses structured failure typing.
 - The service stores significant operational state in labels/annotations; changing annotation keys is therefore a migration concern.
 - Pool reconciliation depends on Redis locks and periodic task delivery rather than a stronger transactional model.
-- The workspace API shells into containers and assumes basic Unix utilities such as `sh`, `find`, `base64`, and standard filesystem semantics inside the sandbox image.
+- Sandbox file and process traffic is served by the E2B-compatible envd process in the main container. The orchestrator authenticates and transparently proxies it through `/api/v1/sandboxes/{id}/envd/*`; it does not use Kubernetes Exec.
 
 ## File Map
 
 - `src/orchestrator/main.py`
-  HTTP and WebSocket entrypoints
+  HTTP entrypoints
 - `src/orchestrator/container.py`
   dependency graph construction
 - `src/orchestrator/config.py`
@@ -462,8 +464,8 @@ These are visible in the current code and matter for maintainers:
   sandbox lifecycle orchestration
 - `src/orchestrator/services/pools.py`
   warm pool allocation and reconciliation
-- `src/orchestrator/services/workspace.py`
-  exec and file operations inside sandboxes
+- `src/orchestrator/services/envd_proxy.py`
+  authenticated streaming proxy to a ready sandbox envd
 - `src/orchestrator/services/webhooks.py`
   webhook CRUD, dispatch, and delivery
 - `src/orchestrator/services/exposes.py`
