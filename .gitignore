@@ -78,9 +78,9 @@ litterbox-kata.zip
 front/
 # External reference project (not part of litterbox)
 AgentENV-main/
-# Compiled sandbox-agent binaries (built via Makefile, not source)
-sandbox-agent-go/bin/
-sandbox-image/bin/
+# Local-only components, not published to this repo
+sandbox-agent-go/
+sandbox-image/
 # Craft Agent / IDE tool dirs
 .omx/
 .baidu-cc/
