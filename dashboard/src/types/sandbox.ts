@@ -30,6 +30,20 @@ export interface TemplateLifecycle {
   preStop?: PreStopLifecycleAction;
 }
 
+export interface WorkspaceConfigOverride {
+  enabled?: boolean;
+  mount_path?: string;
+  size?: string;
+  storage_class?: string;
+}
+
+export interface WorkspaceConfig {
+  enabled: boolean;
+  mount_path: string;
+  size: string;
+  storage_class?: string;
+}
+
 // Sandbox 主体
 export interface Sandbox {
   id: string;
@@ -47,6 +61,8 @@ export interface Sandbox {
   ttl_seconds?: number;
   expires_at?: string;
   time_remaining_seconds?: number;
+  locked: boolean;
+  workspace?: WorkspaceConfig | null;
 }
 
 // Template 定义 - 模板是全局资源，不属于特定租户
@@ -58,11 +74,12 @@ export interface Template {
   command?: string; // 容器启动命令（字符串），可选
   env?: string[]; // 环境变量数组，格式为 "KEY=VALUE"
   host_path_mounts?: HostPathMount[]; // 主机路径挂载列表
+  workspace?: WorkspaceConfigOverride | null;
   cpu_millicores: number; // 1000m = 1核
   cpu_request?: number; // 毫核
   memory_mb: number;
   memory_request?: number;
-  ttl_seconds?: number; // TTL 秒数，可选，范围 300-86400（5分钟-24小时）
+  ttl_seconds?: number; // TTL 秒数，可选；0 表示不超时，正数范围 60-86400
   lifecycle?: TemplateLifecycle;
   metadata?: Record<string, any>; // 包含 user_id 等自定义字段
   created_at: string;
@@ -74,6 +91,8 @@ export interface CreateSandboxRequest {
   name: string;
   template_id: string;
   metadata?: Record<string, any>;
+  env?: string[]; // 环境变量数组，格式为 "KEY=VALUE"
+  workspace?: WorkspaceConfigOverride;
 }
 
 // 创建 Template 请求 - 模板是全局资源，不需要 tenant_id
@@ -85,11 +104,12 @@ export interface CreateTemplateRequest {
   command?: string; // 容器启动命令（字符串），可选
   env?: string[]; // 环境变量数组，格式为 "KEY=VALUE"
   host_path_mounts?: HostPathMount[]; // 主机路径挂载列表
+  workspace?: WorkspaceConfigOverride;
   cpu_millicores: number; // 1000m = 1核
   cpu_request?: number; // 毫核
   memory_mb: number;
   memory_request?: number;
-  ttl_seconds?: number; // TTL 秒数，可选，范围 300-86400（5分钟-24小时）
+  ttl_seconds?: number; // TTL 秒数，可选；0 表示不超时，正数范围 60-86400
   lifecycle?: TemplateLifecycle;
   metadata?: Record<string, any>; // 包含 user_id 等自定义字段
 }
@@ -102,11 +122,12 @@ export interface UpdateTemplateRequest {
   command?: string; // 容器启动命令（字符串），可选
   env?: string[]; // 环境变量数组，格式为 "KEY=VALUE"
   host_path_mounts?: HostPathMount[]; // 主机路径挂载列表
+  workspace?: WorkspaceConfigOverride | null;
   cpu_millicores?: number; // 1000m = 1核
   cpu_request?: number; // 毫核
   memory_mb?: number;
   memory_request?: number;
-  ttl_seconds?: number; // TTL 秒数，可选，范围 300-86400（5分钟-24小时）
+  ttl_seconds?: number; // TTL 秒数，可选；0 表示不超时，正数范围 60-86400
   lifecycle?: TemplateLifecycle;
   metadata?: Record<string, any>; // 包含 user_id 等自定义字段
 }
@@ -140,11 +161,6 @@ export interface UpdatePoolRequest {
 }
 
 // 命令执行
-export interface ExecCommandRequest {
-  command: string[];
-  timeout?: number;
-}
-
 export interface ExecCommandResponse {
   exit_code: number;
   stdout: string;

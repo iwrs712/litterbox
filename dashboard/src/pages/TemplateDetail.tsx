@@ -33,6 +33,7 @@ export function TemplateDetail() {
   const [maxCreatingValue, setMaxCreatingValue] = useState<number>(5);
 
   const formatCpu = (cpuMillicores: number) => `${(cpuMillicores / 1000).toFixed(1)}c`;
+  const hasTemplateTtl = template?.ttl_seconds !== undefined && template.ttl_seconds !== null;
 
   // Find template from store
   useEffect(() => {
@@ -196,7 +197,7 @@ export function TemplateDetail() {
       </div>
 
       {/* Command, Environment Variables, TTL, Lifecycle, and Host Path Mounts */}
-      {(template.command || (template.env && template.env.length > 0) || template.ttl_seconds || template.lifecycle || (template.host_path_mounts && template.host_path_mounts.length > 0)) && (
+      {(template.command || (template.env && template.env.length > 0) || hasTemplateTtl || template.lifecycle || template.workspace || (template.host_path_mounts && template.host_path_mounts.length > 0)) && (
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -205,6 +206,17 @@ export function TemplateDetail() {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
+            {template.workspace && (
+              <div>
+                <p className="text-sm text-muted-foreground mb-2">Workspace Policy</p>
+                <div className="grid gap-3 text-sm sm:grid-cols-2">
+                  <div><span className="text-muted-foreground">Persistent:</span> {template.workspace.enabled === false ? 'Disabled' : 'Enabled'}</div>
+                  {template.workspace.mount_path && <div><span className="text-muted-foreground">Mount path:</span> <code>{template.workspace.mount_path}</code></div>}
+                  {template.workspace.size && <div><span className="text-muted-foreground">PVC size:</span> {template.workspace.size}</div>}
+                  {template.workspace.storage_class && <div><span className="text-muted-foreground">StorageClass:</span> <code>{template.workspace.storage_class}</code></div>}
+                </div>
+              </div>
+            )}
             {template.command && (
               <div>
                 <p className="text-sm text-muted-foreground mb-2">Container Command</p>
@@ -227,16 +239,22 @@ export function TemplateDetail() {
                 </div>
               </div>
             )}
-            {template.ttl_seconds && (
+            {hasTemplateTtl && (
               <div>
                 <p className="text-sm text-muted-foreground mb-2">TTL (Time To Live)</p>
                 <div className="bg-primary/10 text-primary px-3 py-2 rounded">
-                  <span className="text-sm font-mono">
-                    {template.ttl_seconds} seconds
-                  </span>
-                  <span className="text-xs text-muted-foreground ml-2">
-                    ({Math.floor(template.ttl_seconds / 3600)}h {Math.floor((template.ttl_seconds % 3600) / 60)}m)
-                  </span>
+                  {template.ttl_seconds === 0 ? (
+                    <span className="text-sm font-mono">Never expires</span>
+                  ) : (
+                    <>
+                      <span className="text-sm font-mono">
+                        {template.ttl_seconds} seconds
+                      </span>
+                      <span className="text-xs text-muted-foreground ml-2">
+                        ({Math.floor(template.ttl_seconds / 3600)}h {Math.floor((template.ttl_seconds % 3600) / 60)}m)
+                      </span>
+                    </>
+                  )}
                 </div>
               </div>
             )}

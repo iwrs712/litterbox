@@ -1,0 +1,14 @@
+{
+  // Cloudflare Worker that serves the LitterBox dashboard at https://dash.runlet.cn
+  // The name must stay in sync with the existing Worker service that the
+  // dash.runlet.cn custom domain is attached to.
+  "name": "autumn-wood-d033",
+  "compatibility_date": "2026-06-15",
+
+  // Static SPA build output. Unknown paths fall back to index.html so that
+  // client-side routes (e.g. /sandboxes) resolve on a hard refresh.
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application"
+  }
+}

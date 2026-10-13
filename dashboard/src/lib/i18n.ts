@@ -90,6 +90,15 @@ export interface Translations {
       updated: string;
       customMetadata: string;
       executeCommand: string;
+      suspend: string;
+      suspending: string;
+      resume: string;
+      resuming: string;
+      lock: string;
+      locking: string;
+      unlock: string;
+      unlocking: string;
+      locked: string;
     };
     create: {
       title: string;
@@ -98,6 +107,9 @@ export interface Translations {
       templateLabel: string;
       templatePlaceholder: string;
       metadataLabel: string;
+      envLabel: string;
+      envPlaceholder: string;
+      envHelp: string;
       creating: string;
     };
     delete: {
@@ -451,6 +463,15 @@ const en: Translations = {
       updated: 'Updated',
       customMetadata: 'Custom Metadata',
       executeCommand: 'Execute Command',
+      suspend: 'Suspend',
+      suspending: 'Suspending...',
+      resume: 'Resume',
+      resuming: 'Resuming...',
+      lock: 'Lock',
+      locking: 'Locking...',
+      unlock: 'Unlock',
+      unlocking: 'Unlocking...',
+      locked: 'Locked',
     },
     create: {
       title: 'Create New Sandbox',
@@ -459,6 +480,9 @@ const en: Translations = {
       templateLabel: 'Template',
       templatePlaceholder: 'Select a template',
       metadataLabel: 'Metadata (Optional)',
+      envLabel: 'Environment Variables (Optional)',
+      envPlaceholder: 'KEY=VALUE (one per line)',
+      envHelp: 'If this template uses a warm pool, passing env overrides will be rejected.',
       creating: 'Creating...',
     },
     delete: {
@@ -812,6 +836,15 @@ const zh: Translations = {
       updated: '更新时间',
       customMetadata: '自定义元数据',
       executeCommand: '执行命令',
+      suspend: '暂停',
+      suspending: '暂停中...',
+      resume: '恢复',
+      resuming: '恢复中...',
+      lock: '加锁',
+      locking: '加锁中...',
+      unlock: '解除锁定',
+      unlocking: '解除锁定中...',
+      locked: '已锁定',
     },
     create: {
       title: '创建新沙盒',
@@ -820,6 +853,9 @@ const zh: Translations = {
       templateLabel: '模板',
       templatePlaceholder: '选择模板',
       metadataLabel: '元数据（可选）',
+      envLabel: '环境变量（可选）',
+      envPlaceholder: 'KEY=VALUE（每行一个）',
+      envHelp: '如果该模板启用了预热池，传入 env 覆盖会被拒绝。',
       creating: '创建中...',
     },
     delete: {

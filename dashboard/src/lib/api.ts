@@ -12,8 +12,6 @@ import type {
   PoolListResponse,
   CreatePoolRequest,
   UpdatePoolRequest,
-  ExecCommandRequest,
-  ExecCommandResponse,
   SandboxStatus,
   ServiceExpose,
   CreateServiceExposeRequest,
@@ -35,18 +33,6 @@ class ApiClient {
   constructor(baseURL: string, bearerToken: string) {
     this.baseURL = baseURL;
     this.bearerToken = bearerToken;
-  }
-
-  buildWebSocketUrl(endpoint: string): string {
-    const base = new URL(this.baseURL);
-    const wsBase = `${base.protocol === 'https:' ? 'wss:' : 'ws:'}//${base.host}`;
-    const url = new URL(endpoint, wsBase);
-
-    if (this.bearerToken) {
-      url.searchParams.set('token', this.bearerToken);
-    }
-
-    return url.toString();
   }
 
   private async request<T>(
@@ -195,26 +181,35 @@ class ApiClient {
     });
   }
 
+  async suspendSandbox(id: string): Promise<Sandbox> {
+    return this.request<Sandbox>(`${API_PREFIX}/sandboxes/${id}/suspend`, {
+      method: 'POST',
+    });
+  }
+
+  async resumeSandbox(id: string): Promise<Sandbox> {
+    return this.request<Sandbox>(`${API_PREFIX}/sandboxes/${id}/resume`, {
+      method: 'POST',
+    });
+  }
+
+  async lockSandbox(id: string): Promise<Sandbox> {
+    return this.request<Sandbox>(`${API_PREFIX}/sandboxes/${id}/lock`, {
+      method: 'POST',
+    });
+  }
+
+  async unlockSandbox(id: string): Promise<Sandbox> {
+    return this.request<Sandbox>(`${API_PREFIX}/sandboxes/${id}/unlock`, {
+      method: 'POST',
+    });
+  }
+
   async renewSandboxTtl(id: string, ttl = 0): Promise<Sandbox> {
     return this.request<Sandbox>(`${API_PREFIX}/sandboxes/${id}/renew`, {
       method: 'POST',
       body: JSON.stringify({ ttl }),
     });
-  }
-
-  // ==================== Execute Command ====================
-
-  async execCommand(
-    sandboxId: string,
-    data: ExecCommandRequest
-  ): Promise<ExecCommandResponse> {
-    return this.request<ExecCommandResponse>(
-      `${API_PREFIX}/sandboxes/${sandboxId}/exec`,
-      {
-        method: 'POST',
-        body: JSON.stringify(data),
-      }
-    );
   }
 
   // ==================== Pool Management ====================

@@ -4,6 +4,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
 import { apiClient } from '@/lib/api';
+import { openEnvdTerminal } from '@/lib/envd';
 
 interface TerminalProps {
   sandboxId: string;
@@ -11,7 +12,6 @@ interface TerminalProps {
 
 export function Terminal({ sandboxId }: TerminalProps) {
   const terminalRef = useRef<HTMLDivElement>(null);
-  const wsRef = useRef<WebSocket | null>(null);
   const lastRenewedAtRef = useRef(0);
   const lastTerminalSizeRef = useRef({ cols: 0, rows: 0 });
 
@@ -55,6 +55,7 @@ export function Terminal({ sandboxId }: TerminalProps) {
     term.loadAddon(new WebLinksAddon());
     term.open(terminalRef.current);
 
+    let session: ReturnType<typeof openEnvdTerminal> | undefined;
     const fit = (notify = false) => {
       try {
         fitAddon.fit();
@@ -62,9 +63,8 @@ export function Terminal({ sandboxId }: TerminalProps) {
       } catch { /* ignore */ }
     };
 
-    setTimeout(() => fit(), 0);
-
-    const wsUrl = apiClient.buildWebSocketUrl(`/api/v1/sandboxes/${sandboxId}/terminal`);
+    fit();
+    session = openEnvdTerminal(sandboxId, { cols: Math.max(1, term.cols), rows: Math.max(1, term.rows) });
 
     let renewInterval: number | undefined;
 
@@ -75,68 +75,45 @@ export function Terminal({ sandboxId }: TerminalProps) {
       try { await apiClient.renewSandboxTtl(sandboxId); } catch { /* ignore */ }
     };
 
-    let ws: WebSocket;
-
     const sendResize = (cols: number, rows: number) => {
-      if (ws?.readyState !== WebSocket.OPEN || !cols || !rows) return;
+      if (!session || !cols || !rows) return;
       if (lastTerminalSizeRef.current.cols === cols && lastTerminalSizeRef.current.rows === rows) return;
       lastTerminalSizeRef.current = { cols, rows };
-      ws.send(JSON.stringify({ type: 'resize', cols, rows }));
+      session.resize(cols, rows);
     };
 
-    try {
-      ws = new WebSocket(wsUrl);
-      wsRef.current = ws;
+    term.writeln('\x1b[1;32mConnected\x1b[0m  \x1b[2m' + sandboxId + '\x1b[0m');
+    term.writeln('');
+    fit(true);
+    setTimeout(() => fit(true), 50);
+    void renewTtl(true);
+    renewInterval = window.setInterval(() => void renewTtl(true), 60_000);
 
-      ws.onopen = () => {
-        term.writeln('\x1b[1;32m✓ Connected\x1b[0m  \x1b[2m' + sandboxId + '\x1b[0m');
-        term.writeln('');
-        fit(true);
-        setTimeout(() => fit(true), 50);
-        void renewTtl(true);
-        renewInterval = window.setInterval(() => void renewTtl(true), 60_000);
-      };
+    let disposed = false;
+    void (async () => {
+      for await (const data of session.output) {
+        if (!disposed) term.write(data);
+      }
+      if (!disposed) term.writeln('\n\x1b[2mconnection closed\x1b[0m');
+    })();
 
-      ws.onmessage = (event) => {
-        if (typeof event.data !== 'string') return;
-        try {
-          const msg = JSON.parse(event.data);
-          if ((msg.type === 'stdout' || msg.type === 'stderr') && msg.data) {
-            term.write(msg.data);
-          }
-        } catch {
-          term.write(event.data);
-        }
-      };
+    const dataDisposable = term.onData((data) => {
+      void renewTtl();
+      session?.send(new TextEncoder().encode(data));
+    });
+    const resizeDisposable = term.onResize(({ cols, rows }) => sendResize(cols, rows));
+    const onResize = () => fit(true);
+    window.addEventListener('resize', onResize);
 
-      ws.onerror = () => {
-        term.writeln('\x1b[1;31m✗ Connection error\x1b[0m');
-      };
-
-      ws.onclose = () => {
-        if (renewInterval) clearInterval(renewInterval);
-        term.writeln('\n\x1b[2m— connection closed —\x1b[0m');
-      };
-
-      term.onData((data) => {
-        if (ws.readyState === WebSocket.OPEN) {
-          void renewTtl();
-          try { ws.send(JSON.stringify({ type: 'stdin', data })); } catch { /* ignore */ }
-        }
-      });
-
-      const onResize = () => fit(true);
-      window.addEventListener('resize', onResize);
-
-      return () => {
-        window.removeEventListener('resize', onResize);
-        if (renewInterval) clearInterval(renewInterval);
-        if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) ws.close();
-        term.dispose();
-      };
-    } catch {
-      return () => { term.dispose(); };
-    }
+    return () => {
+      disposed = true;
+      window.removeEventListener('resize', onResize);
+      dataDisposable.dispose();
+      resizeDisposable.dispose();
+      if (renewInterval) clearInterval(renewInterval);
+      session?.close();
+      term.dispose();
+    };
   }, [sandboxId]);
 
   return (

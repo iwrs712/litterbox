@@ -20,7 +20,7 @@ import { SandboxStatusBadge } from '@/components/SandboxStatusBadge';
 import { PoolStateBadge } from '@/components/PoolStateBadge';
 import { ExposeList } from '@/components/ExposeList';
 import { CreateExposeDialog } from '@/components/CreateExposeDialog';
-import { ArrowLeft, RefreshCw, Cpu, HardDrive, FileCode, Trash2, Loader2, Server, Globe, Plus, Terminal } from 'lucide-react';
+import { ArrowLeft, RefreshCw, Cpu, HardDrive, FileCode, Trash2, Loader2, Server, Globe, Plus, Terminal, Pause, Play, Lock, Unlock } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 
 export function SandboxDetail() {
@@ -30,6 +30,10 @@ export function SandboxDetail() {
     sandboxes, 
     fetchSandboxes, 
     deleteSandbox, 
+    suspendSandbox,
+    resumeSandbox,
+    lockSandbox,
+    unlockSandbox,
     loading, 
     error, 
     clearError,
@@ -91,6 +95,39 @@ export function SandboxDetail() {
     }
   };
 
+  const handleLifecycleAction = async (action: 'suspend' | 'resume') => {
+    if (!sandboxId) return;
+    setActionLoading(action);
+    try {
+      if (action === 'suspend') {
+        await suspendSandbox(sandboxId);
+      } else {
+        await resumeSandbox(sandboxId);
+      }
+      await fetchExposes(sandboxId);
+    } catch (err) {
+      // Error handled by store
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleLockAction = async (action: 'lock' | 'unlock') => {
+    if (!sandboxId) return;
+    setActionLoading(action);
+    try {
+      if (action === 'lock') {
+        await lockSandbox(sandboxId);
+      } else {
+        await unlockSandbox(sandboxId);
+      }
+    } catch (err) {
+      // Error handled by store
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
   if (loading && !sandbox) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -135,6 +172,11 @@ export function SandboxDetail() {
             <div className="flex items-center gap-3">
               <h1 className="text-3xl font-bold tracking-tight">{sandbox.name}</h1>
               <SandboxStatusBadge status={sandbox.status} />
+              {sandbox.locked && (
+                <span title={t.sandbox.detail.locked}>
+                  <Lock className="h-4 w-4 text-destructive" aria-label={t.sandbox.detail.locked} />
+                </span>
+              )}
             </div>
             <p className="text-sm text-muted-foreground font-mono mt-1">{sandbox.id}</p>
           </div>
@@ -161,10 +203,40 @@ export function SandboxDetail() {
               </a>
             </Button>
           )}
+          {sandbox.status === 'running' && (
+            <Button
+              variant="outline"
+              onClick={() => handleLifecycleAction('suspend')}
+              disabled={actionLoading !== null}
+            >
+              <Pause className="mr-2 h-4 w-4" />
+              {actionLoading === 'suspend' ? t.sandbox.detail.suspending : t.sandbox.detail.suspend}
+            </Button>
+          )}
+          {sandbox.status === 'stopped' && !sandbox.locked && (
+            <Button
+              variant="outline"
+              onClick={() => handleLifecycleAction('resume')}
+              disabled={actionLoading !== null}
+            >
+              <Play className="mr-2 h-4 w-4" />
+              {actionLoading === 'resume' ? t.sandbox.detail.resuming : t.sandbox.detail.resume}
+            </Button>
+          )}
+          <Button
+            variant="outline"
+            onClick={() => handleLockAction(sandbox.locked ? 'unlock' : 'lock')}
+            disabled={actionLoading !== null}
+          >
+            {sandbox.locked ? <Unlock className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
+            {sandbox.locked
+              ? (actionLoading === 'unlock' ? t.sandbox.detail.unlocking : t.sandbox.detail.unlock)
+              : (actionLoading === 'lock' ? t.sandbox.detail.locking : t.sandbox.detail.lock)}
+          </Button>
           <Button
             variant="destructive"
             onClick={() => setShowDeleteDialog(true)}
-            disabled={actionLoading === 'delete'}
+            disabled={actionLoading !== null}
           >
             <Trash2 className="mr-2 h-4 w-4" />
             {t.sandbox.detail.delete}
@@ -227,6 +299,35 @@ export function SandboxDetail() {
           </CardContent>
         </Card>
       </div>
+
+      {sandbox.workspace && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <HardDrive className="h-5 w-5" />
+              Workspace
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <div>
+              <p className="text-sm text-muted-foreground">Persistent</p>
+              <p className="font-medium">{sandbox.workspace.enabled ? 'Enabled' : 'Disabled'}</p>
+            </div>
+            <div>
+              <p className="text-sm text-muted-foreground">Mount path</p>
+              <code className="text-sm break-all">{sandbox.workspace.mount_path}</code>
+            </div>
+            <div>
+              <p className="text-sm text-muted-foreground">PVC size</p>
+              <p className="font-medium">{sandbox.workspace.size}</p>
+            </div>
+            <div>
+              <p className="text-sm text-muted-foreground">StorageClass</p>
+              <code className="text-sm break-all">{sandbox.workspace.storage_class || 'Default'}</code>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Pool Information */}
       <Card>

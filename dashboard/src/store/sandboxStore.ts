@@ -2,6 +2,7 @@
 
 import { create } from 'zustand';
 import { apiClient } from '@/lib/api';
+import { runEnvdCommand } from '@/lib/envd';
 import type {
   Sandbox,
   Template,
@@ -45,6 +46,10 @@ interface SandboxStore {
   getSandbox: (id: string) => Promise<Sandbox>;
   createSandbox: (data: CreateSandboxRequest) => Promise<void>;
   deleteSandbox: (id: string) => Promise<void>;
+  suspendSandbox: (id: string) => Promise<void>;
+  resumeSandbox: (id: string) => Promise<void>;
+  lockSandbox: (id: string) => Promise<void>;
+  unlockSandbox: (id: string) => Promise<void>;
   renewSandboxTtl: (sandboxId: string, ttl?: number) => Promise<void>;
   execCommand: (sandboxId: string, command: string[]) => Promise<ExecCommandResponse>;
 
@@ -161,6 +166,74 @@ export const useSandboxStore = create<SandboxStore>((set, get) => ({
     }
   },
 
+  suspendSandbox: async (id: string) => {
+    set({ loading: true, error: null });
+    try {
+      const sandbox = await apiClient.suspendSandbox(id);
+      set((state) => ({
+        sandboxes: (state.sandboxes || []).map((item) => item.id === id ? sandbox : item),
+        loading: false,
+      }));
+    } catch (error) {
+      set({
+        error: error instanceof Error ? error.message : 'Failed to suspend sandbox',
+        loading: false,
+      });
+      throw error;
+    }
+  },
+
+  resumeSandbox: async (id: string) => {
+    set({ loading: true, error: null });
+    try {
+      const sandbox = await apiClient.resumeSandbox(id);
+      set((state) => ({
+        sandboxes: (state.sandboxes || []).map((item) => item.id === id ? sandbox : item),
+        loading: false,
+      }));
+    } catch (error) {
+      set({
+        error: error instanceof Error ? error.message : 'Failed to resume sandbox',
+        loading: false,
+      });
+      throw error;
+    }
+  },
+
+  lockSandbox: async (id: string) => {
+    set({ loading: true, error: null });
+    try {
+      const sandbox = await apiClient.lockSandbox(id);
+      set((state) => ({
+        sandboxes: (state.sandboxes || []).map((item) => item.id === id ? sandbox : item),
+        loading: false,
+      }));
+    } catch (error) {
+      set({
+        error: error instanceof Error ? error.message : 'Failed to lock sandbox',
+        loading: false,
+      });
+      throw error;
+    }
+  },
+
+  unlockSandbox: async (id: string) => {
+    set({ loading: true, error: null });
+    try {
+      const sandbox = await apiClient.unlockSandbox(id);
+      set((state) => ({
+        sandboxes: (state.sandboxes || []).map((item) => item.id === id ? sandbox : item),
+        loading: false,
+      }));
+    } catch (error) {
+      set({
+        error: error instanceof Error ? error.message : 'Failed to unlock sandbox',
+        loading: false,
+      });
+      throw error;
+    }
+  },
+
   renewSandboxTtl: async (sandboxId: string, ttl = 0) => {
     try {
       await apiClient.renewSandboxTtl(sandboxId, ttl);
@@ -175,11 +248,7 @@ export const useSandboxStore = create<SandboxStore>((set, get) => ({
   execCommand: async (sandboxId: string, command: string[]) => {
     try {
       await get().renewSandboxTtl(sandboxId);
-      const response = await apiClient.execCommand(sandboxId, {
-        command,
-        timeout: 30,
-      });
-      return response;
+      return await runEnvdCommand(sandboxId, command);
     } catch (error) {
       set({
         error: error instanceof Error ? error.message : 'Failed to execute command',

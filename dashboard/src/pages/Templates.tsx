@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { Switch } from '@/components/ui/switch';
 import {
   Table,
   TableBody,
@@ -38,6 +39,13 @@ import { ErrorAlert } from '@/components/ErrorAlert';
 import { Plus, Edit, Trash2, RefreshCw, FileCode, Eye, Loader2 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 
+const DEFAULT_WORKSPACE = {
+  enabled: true,
+  mountPath: '/workspace',
+  size: '1Gi',
+  storageClass: 'litterbox-workspace-lvm',
+};
+
 export function Templates() {
   const { t } = useApp();
   const { templates, fetchTemplates, createTemplate, updateTemplate, deleteTemplate, loading, error, clearError } = useSandboxStore();
@@ -63,11 +71,27 @@ export function Templates() {
     cpu_request: undefined as number | undefined,
     memory_mb: 512,
     memory_request: undefined as number | undefined,
-    ttl_seconds: undefined as number | undefined, // TTL秒数（300-86400）
+    ttl_seconds: undefined as number | undefined, // TTL秒数：0 表示不超时，正数范围 60-86400
+    workspace_mode: 'inherit' as 'inherit' | 'custom',
+    workspace_enabled: DEFAULT_WORKSPACE.enabled,
+    workspace_mount_path: DEFAULT_WORKSPACE.mountPath,
+    workspace_size: DEFAULT_WORKSPACE.size,
+    workspace_storage_class: DEFAULT_WORKSPACE.storageClass,
     user_id: '', // user_id 字段（将存入 metadata）
     metadata: {} as Record<string, any>,
   });
   const [showAdvanced, setShowAdvanced] = useState(false);
+
+  const workspaceOverride = () => ({
+    enabled: formData.workspace_enabled,
+    ...(formData.workspace_mount_path.trim()
+      ? { mount_path: formData.workspace_mount_path.trim() }
+      : {}),
+    ...(formData.workspace_size.trim() ? { size: formData.workspace_size.trim() } : {}),
+    ...(formData.workspace_storage_class.trim()
+      ? { storage_class: formData.workspace_storage_class.trim() }
+      : {}),
+  });
 
   useEffect(() => {
     // 模板是全局资源，不再需要 tenant_id
@@ -143,6 +167,7 @@ export function Templates() {
         memory_mb: formData.memory_mb,
         memory_request: formData.memory_request,
         ttl_seconds: formData.ttl_seconds,
+        workspace: formData.workspace_mode === 'custom' ? workspaceOverride() : undefined,
         metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
       });
       setShowCreateDialog(false);
@@ -206,6 +231,7 @@ export function Templates() {
         memory_mb: formData.memory_mb,
         memory_request: formData.memory_request,
         ttl_seconds: formData.ttl_seconds,
+        workspace: formData.workspace_mode === 'custom' ? workspaceOverride() : null,
         metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
       };
 
@@ -254,6 +280,11 @@ export function Templates() {
       memory_mb: template.memory_mb,
       memory_request: template.memory_request,
       ttl_seconds: template.ttl_seconds,
+      workspace_mode: template.workspace ? 'custom' : 'inherit',
+      workspace_enabled: template.workspace?.enabled ?? DEFAULT_WORKSPACE.enabled,
+      workspace_mount_path: template.workspace?.mount_path ?? DEFAULT_WORKSPACE.mountPath,
+      workspace_size: template.workspace?.size ?? DEFAULT_WORKSPACE.size,
+      workspace_storage_class: template.workspace?.storage_class ?? DEFAULT_WORKSPACE.storageClass,
       user_id: template.metadata?.user_id || '', // 从 metadata 中提取 user_id
       metadata: template.metadata || {},
     });
@@ -280,6 +311,11 @@ export function Templates() {
       memory_mb: 512,
       memory_request: undefined,
       ttl_seconds: undefined, // Reset ttl_seconds
+      workspace_mode: 'inherit',
+      workspace_enabled: DEFAULT_WORKSPACE.enabled,
+      workspace_mount_path: DEFAULT_WORKSPACE.mountPath,
+      workspace_size: DEFAULT_WORKSPACE.size,
+      workspace_storage_class: DEFAULT_WORKSPACE.storageClass,
       user_id: '', // Reset user_id
       metadata: {},
     });
@@ -591,23 +627,70 @@ export function Templates() {
               </p>
             </div>
 
+            <div className="space-y-3 border-t pt-4">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <Label htmlFor="create-workspace-override">Workspace policy</Label>
+                  <p className="text-xs text-muted-foreground">Use a template-specific policy for future sandboxes.</p>
+                </div>
+                <Switch
+                  id="create-workspace-override"
+                  checked={formData.workspace_mode === 'custom'}
+                  onCheckedChange={(checked) => setFormData({
+                    ...formData,
+                    workspace_mode: checked ? 'custom' : 'inherit',
+                  })}
+                  disabled={actionLoading === 'create'}
+                />
+              </div>
+              {formData.workspace_mode === 'custom' && (
+                <div className="space-y-3 border-l-2 pl-4">
+                  <div className="flex items-center justify-between gap-4">
+                    <Label htmlFor="create-workspace-enabled">Persistent workspace</Label>
+                    <Switch
+                      id="create-workspace-enabled"
+                      checked={formData.workspace_enabled}
+                      onCheckedChange={(checked) => setFormData({ ...formData, workspace_enabled: checked })}
+                      disabled={actionLoading === 'create'}
+                    />
+                  </div>
+                  {formData.workspace_enabled && (
+                    <div className="grid gap-3 sm:grid-cols-3">
+                      <div className="space-y-2">
+                        <Label htmlFor="create-workspace-path">Mount path</Label>
+                        <Input id="create-workspace-path" value={formData.workspace_mount_path} onChange={(e) => setFormData({ ...formData, workspace_mount_path: e.target.value })} placeholder={DEFAULT_WORKSPACE.mountPath} disabled={actionLoading === 'create'} />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="create-workspace-size">PVC size</Label>
+                        <Input id="create-workspace-size" value={formData.workspace_size} onChange={(e) => setFormData({ ...formData, workspace_size: e.target.value })} placeholder={DEFAULT_WORKSPACE.size} disabled={actionLoading === 'create'} />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="create-workspace-storage">StorageClass</Label>
+                        <Input id="create-workspace-storage" value={formData.workspace_storage_class} onChange={(e) => setFormData({ ...formData, workspace_storage_class: e.target.value })} placeholder={DEFAULT_WORKSPACE.storageClass} disabled={actionLoading === 'create'} />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
             <div className="space-y-2">
               <Label htmlFor="create-ttl">TTL (Time To Live) - Seconds (Optional)</Label>
               <Input
                 id="create-ttl"
                 type="number"
-                min="300"
+                min="0"
                 max="86400"
-                value={formData.ttl_seconds || ''}
+                value={formData.ttl_seconds ?? ''}
                 onChange={(e) => setFormData({
                   ...formData,
                   ttl_seconds: e.target.value ? parseInt(e.target.value) : undefined
                 })}
-                placeholder="e.g., 3600 (1 hour)"
+                placeholder="e.g., 0 (never expire) or 3600 (1 hour)"
                 disabled={actionLoading === 'create'}
               />
               <p className="text-xs text-muted-foreground">
-                Sandbox lifetime in seconds. Range: 300 (5 min) to 86400 (24 hours). Leave empty for default.
+                Sandbox lifetime in seconds. Use 0 for no timeout, 60 to 86400 for a timeout, or leave empty for default.
               </p>
             </div>
 
@@ -824,23 +907,70 @@ export function Templates() {
               </p>
             </div>
 
+            <div className="space-y-3 border-t pt-4">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <Label htmlFor="edit-workspace-override">Workspace policy</Label>
+                  <p className="text-xs text-muted-foreground">Clearing this policy returns future sandboxes to cluster defaults.</p>
+                </div>
+                <Switch
+                  id="edit-workspace-override"
+                  checked={formData.workspace_mode === 'custom'}
+                  onCheckedChange={(checked) => setFormData({
+                    ...formData,
+                    workspace_mode: checked ? 'custom' : 'inherit',
+                  })}
+                  disabled={actionLoading === 'edit'}
+                />
+              </div>
+              {formData.workspace_mode === 'custom' && (
+                <div className="space-y-3 border-l-2 pl-4">
+                  <div className="flex items-center justify-between gap-4">
+                    <Label htmlFor="edit-workspace-enabled">Persistent workspace</Label>
+                    <Switch
+                      id="edit-workspace-enabled"
+                      checked={formData.workspace_enabled}
+                      onCheckedChange={(checked) => setFormData({ ...formData, workspace_enabled: checked })}
+                      disabled={actionLoading === 'edit'}
+                    />
+                  </div>
+                  {formData.workspace_enabled && (
+                    <div className="grid gap-3 sm:grid-cols-3">
+                      <div className="space-y-2">
+                        <Label htmlFor="edit-workspace-path">Mount path</Label>
+                        <Input id="edit-workspace-path" value={formData.workspace_mount_path} onChange={(e) => setFormData({ ...formData, workspace_mount_path: e.target.value })} placeholder={DEFAULT_WORKSPACE.mountPath} disabled={actionLoading === 'edit'} />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="edit-workspace-size">PVC size</Label>
+                        <Input id="edit-workspace-size" value={formData.workspace_size} onChange={(e) => setFormData({ ...formData, workspace_size: e.target.value })} placeholder={DEFAULT_WORKSPACE.size} disabled={actionLoading === 'edit'} />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="edit-workspace-storage">StorageClass</Label>
+                        <Input id="edit-workspace-storage" value={formData.workspace_storage_class} onChange={(e) => setFormData({ ...formData, workspace_storage_class: e.target.value })} placeholder={DEFAULT_WORKSPACE.storageClass} disabled={actionLoading === 'edit'} />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
             <div className="space-y-2">
               <Label htmlFor="edit-ttl">TTL (Time To Live) - Seconds (Optional)</Label>
               <Input
                 id="edit-ttl"
                 type="number"
-                min="300"
+                min="0"
                 max="86400"
-                value={formData.ttl_seconds || ''}
+                value={formData.ttl_seconds ?? ''}
                 onChange={(e) => setFormData({
                   ...formData,
                   ttl_seconds: e.target.value ? parseInt(e.target.value) : undefined
                 })}
-                placeholder="e.g., 3600 (1 hour)"
+                placeholder="e.g., 0 (never expire) or 3600 (1 hour)"
                 disabled={actionLoading === 'edit'}
               />
               <p className="text-xs text-muted-foreground">
-                Sandbox lifetime in seconds. Range: 300 (5 min) to 86400 (24 hours). Leave empty for default.
+                Sandbox lifetime in seconds. Use 0 for no timeout, 60 to 86400 for a timeout, or leave empty for default.
               </p>
             </div>
 
