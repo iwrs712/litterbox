@@ -605,6 +605,33 @@ class SandboxService:
                     stdin_once=False,
                     tty=True,
                     image_pull_policy="Always",
+                    # AppArmor unconfined, because the default profile silently
+                    # blocks every signal sent inside the sandbox.
+                    #
+                    # What that looked like: a preview would not restart. The
+                    # supervisor stops the previous server with `kill -9`, the
+                    # signal was refused, the old server kept port 3000, and the
+                    # replacement drifted to 3001 while the exposed URL still
+                    # pointed at 3000 — so the reader got 404 from another
+                    # workspace's app.
+                    #
+                    # Measured inside a real sandbox: `signal 0` succeeds while
+                    # signals 1, 2, 9 and 15 all return EACCES — including against a
+                    # child the same shell had just forked, with the same uid, the
+                    # same PID namespace, CAP_KILL present and no seccomp filter.
+                    # Adding CAP_SYS_PTRACE, CAP_SYS_ADMIN or CAP_DAC_READ_SEARCH
+                    # changed nothing; comparing a working `privileged` container
+                    # with a normal one showed the only meaningful difference was
+                    # that privileged carries no AppArmor profile. Unconfined fixed
+                    # it with capabilities untouched, confirmed by A/B: confined
+                    # refuses the signal, unconfined kills the process.
+                    #
+                    # The workload is arbitrary code the sandbox exists to contain,
+                    # one tenant per container; the profile's signal rule protects
+                    # nothing the container boundary does not.
+                    security_context=client.V1SecurityContext(
+                        app_armor_profile=client.V1AppArmorProfile(type="Unconfined"),
+                    ),
                 )
             ],
         )
