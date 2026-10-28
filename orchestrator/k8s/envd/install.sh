@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NAMESPACE="${NAMESPACE:-litterbox}"
 DAEMONSET="${DAEMONSET:-envd-node-installer}"
-ENVD_VERSION="${ENVD_VERSION:-0.1.0}"
+ENVD_VERSION="${ENVD_VERSION:-0.1.3}"
 INSTALLER_IMAGE="${INSTALLER_IMAGE:-registry.runlet.cn/litterbox/envd-node-installer:${ENVD_VERSION}-amd64}"
 IMAGE_PULL_SECRET="${IMAGE_PULL_SECRET:-harbor-pull-secret}"
 TARGET_SELECTOR="${TARGET_SELECTOR:-katacontainers.io/kata-runtime=true,kubernetes.io/arch=amd64}"

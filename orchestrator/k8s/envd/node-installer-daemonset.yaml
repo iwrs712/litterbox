@@ -27,8 +27,8 @@ spec:
         - name: harbor-pull-secret
       initContainers:
         - name: installer
-          image: registry.runlet.cn/litterbox/envd-node-installer:0.1.0-amd64
-          imagePullPolicy: IfNotPresent
+          image: registry.runlet.cn/litterbox/envd-node-installer:0.1.3-amd64
+          imagePullPolicy: Always
           command:
             - /bin/sh
             - -ec
@@ -44,8 +44,8 @@ spec:
               mountPath: /host-bin
       containers:
         - name: ready
-          image: registry.runlet.cn/litterbox/envd-node-installer:0.1.0-amd64
-          imagePullPolicy: IfNotPresent
+          image: registry.runlet.cn/litterbox/envd-node-installer:0.1.3-amd64
+          imagePullPolicy: Always
           command:
             - /bin/sh
             - -ec

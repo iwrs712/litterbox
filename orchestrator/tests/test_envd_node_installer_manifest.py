@@ -18,7 +18,7 @@ def test_envd_node_installer_targets_kata_nodes_and_writes_host_binary() -> None
         "katacontainers.io/kata-runtime": "true",
         "kubernetes.io/arch": "amd64",
     }
-    assert installer["image"].endswith("envd-node-installer:0.1.0-amd64")
+    assert installer["image"].endswith("envd-node-installer:0.1.3-amd64")
     assert installer["volumeMounts"] == [
         {"name": "envd-host-bin", "mountPath": "/host-bin"}
     ]
@@ -43,7 +43,7 @@ def test_envd_node_installer_is_an_init_container() -> None:
     assert len(pod_spec["initContainers"]) == 1
     ready = pod_spec["containers"][0]
     assert ready["name"] == "ready"
-    assert ready["image"].endswith("envd-node-installer:0.1.0-amd64")
+    assert ready["image"].endswith("envd-node-installer:0.1.3-amd64")
     assert ready["volumeMounts"] == [
         {"name": "envd-host-bin", "mountPath": "/host-bin", "readOnly": True}
     ]
