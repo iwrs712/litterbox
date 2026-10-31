@@ -27,8 +27,8 @@ Sandbox 主容器的 `/opt/litterbox/envd/sandbox-agent`，并通过 `postStart`
 cd /Users/v_chenyongjie01/personal_project/github/litterbox/sandbox-agent-go
 make test
 make build-linux-amd64
-make build-node-installer ENVD_VERSION=0.1.3
-make push-node-installer ENVD_VERSION=0.1.3
+make build-node-installer ENVD_VERSION=0.1.4
+make push-node-installer ENVD_VERSION=0.1.4
 ```
 
 检查产物架构和镜像：
@@ -36,14 +36,14 @@ make push-node-installer ENVD_VERSION=0.1.3
 ```bash
 file bin/sandbox-agent-linux-amd64
 docker buildx imagetools inspect \
-  registry.runlet.cn/litterbox/envd-node-installer:0.1.3-amd64
+  registry.runlet.cn/litterbox/envd-node-installer:0.1.4-amd64
 ```
 
 ### 2. 安装到所有 Kata 节点
 
 ```bash
 cd /Users/v_chenyongjie01/personal_project/github/litterbox/orchestrator
-ENVD_VERSION=0.1.3 ./k8s/envd/install.sh
+ENVD_VERSION=0.1.4 ./k8s/envd/install.sh
 ```
 
 安装前必须保证 `litterbox` namespace 已存在，并且其中有用于拉取私有镜像的
