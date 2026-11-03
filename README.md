@@ -166,11 +166,11 @@ Command execution and file access require envd; see [E2B Compatibility](#e2b-com
 
 ```bash
 cd dashboard
-cp .env.example .env      # set VITE_API_BASE_URL and VITE_API_BEARER_TOKEN
-npm install && npm run dev
+npm install
+npm run dev:local     # uses .env.local; defaults to http://127.0.0.1:8080
 ```
 
-Open **http://localhost:5173**.
+Open **http://localhost:5173**. The local script creates `.env.local` from `.env.local.example` (gitignored) and pins port `5173`; set `VITE_PORT` to change it.
 
 <br>
 

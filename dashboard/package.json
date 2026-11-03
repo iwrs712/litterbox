@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:local": "sh scripts/dev-local.sh",
     "build": "npm run generate:envd && tsc -b && vite build",
     "generate:envd": "buf generate --template buf.gen.yaml",
     "lint": "eslint .",

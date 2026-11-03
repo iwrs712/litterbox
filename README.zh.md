@@ -167,11 +167,11 @@ print(sandbox.sandbox_id)
 
 ```bash
 cd dashboard
-cp .env.example .env      # 设置 VITE_API_BASE_URL、VITE_API_BEARER_TOKEN
-npm install && npm run dev
+npm install
+npm run dev:local     # 使用 .env.local，默认指向 http://127.0.0.1:8080
 ```
 
-访问 **http://localhost:5173**。
+访问 **http://localhost:5173**。本地脚本会从 `.env.local.example` 生成被 git 忽略的 `.env.local`，并固定端口 `5173`；可用 `VITE_PORT` 覆盖。
 
 <br>
 
