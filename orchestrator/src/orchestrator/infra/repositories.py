@@ -3,7 +3,6 @@ from __future__ import annotations
 import re
 from typing import Generic, TypeVar
 
-from kubernetes.client import ApiException
 
 from orchestrator.domain.models import Template, Webhook
 from orchestrator.infra.kubernetes import KubernetesGateway

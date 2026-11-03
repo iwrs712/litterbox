@@ -21,7 +21,7 @@ from orchestrator.infra.sandbox_crd import SandboxCRDGateway
 from orchestrator.services.sandbox_crd import SandboxCRDService
 from orchestrator.services.templates import TemplateService
 from orchestrator.services.webhooks import WebhookDispatcher
-from orchestrator.utils import is_valid_label_part, short_id, utcnow
+from orchestrator.utils import is_valid_label_part, short_id
 
 
 class SandboxResumeLockedError(RuntimeError):
@@ -230,36 +230,6 @@ class SandboxService:
         annotations = dict(cr_metadata.get("annotations") or {})
         self._apply_user_updates(req, labels=labels, annotations=annotations)
         self.crd.patch_metadata(sandbox_id, labels=labels, annotations=annotations)
-        return self.get_sandbox(sandbox_id)
-
-    def update_pool_state(self, sandbox_id: str, pool_state: str) -> None:
-        self.crd.set_pool_state(sandbox_id, pool_state)
-
-    def mark_pool_allocated(
-        self,
-        sandbox_id: str,
-        *,
-        name: str,
-        metadata: dict[str, str],
-        ttl_seconds: int,
-    ) -> SandboxResponse:
-        cr = self.crd.get_cr(sandbox_id)
-        cr_metadata = cr.get("metadata") or {}
-        labels = dict(cr_metadata.get("labels") or {})
-        annotations = dict(cr_metadata.get("annotations") or {})
-        self._apply_user_updates(
-            UpdateSandboxRequest(name=name, metadata=metadata),
-            labels=labels,
-            annotations=annotations,
-        )
-        labels["litterbox.io/pool-state"] = PoolState.ALLOCATED
-        annotations["litterbox.io/allocated-at"] = utcnow().isoformat()
-        self.crd.mark_allocated(
-            sandbox_id,
-            labels=labels,
-            annotations=annotations,
-            ttl_seconds=ttl_seconds,
-        )
         return self.get_sandbox(sandbox_id)
 
     def delete_sandbox(self, sandbox_id: str, deletion_reason: str = "manual") -> None:

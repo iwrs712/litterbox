@@ -93,16 +93,6 @@ class SandboxCRDGateway:
             _preload_content=True,
         )
 
-    def update_status(self, name: str, status: dict[str, Any]) -> dict[str, Any]:
-        return self.api.patch_namespaced_custom_object_status(
-            self.group,
-            self.version,
-            self.namespace,
-            self.plural,
-            name,
-            {"status": status},
-        )
-
     def delete(self, name: str) -> None:
         body = client.V1DeleteOptions(propagation_policy="Foreground")
         try:
@@ -117,15 +107,6 @@ class SandboxCRDGateway:
         except ApiException as exc:
             if exc.status != 404:
                 raise
-
-    def exists(self, name: str) -> bool:
-        try:
-            self.get(name)
-        except ApiException as exc:
-            if exc.status == 404:
-                return False
-            raise
-        return True
 
     def wait_until_phase(
         self,

@@ -402,11 +402,6 @@ class ServiceExpose(BaseModel):
     updated_at: datetime
 
 
-class ServiceExposeListResponse(BaseModel):
-    exposes: list[ServiceExpose]
-    total: int
-
-
 class WebhookRetryConfig(BaseModel):
     max_attempts: int = 5
     interval_ms: int = 200

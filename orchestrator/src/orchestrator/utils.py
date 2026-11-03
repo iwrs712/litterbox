@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-import json
 import re
 from uuid import uuid4
 
@@ -45,7 +44,3 @@ def parse_env_list(values: list[str]) -> list[tuple[str, str]]:
             key, value = item, ""
         parsed.append((key.strip(), value))
     return parsed
-
-
-def json_dumps(data: object) -> str:
-    return json.dumps(data, ensure_ascii=True, separators=(",", ":"))

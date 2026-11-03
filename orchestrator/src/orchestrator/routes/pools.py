@@ -32,7 +32,7 @@ def create_pool(
 def list_pools(container: Annotated[Container, Depends(get_container)]) -> JSONResponse:
     try:
         return ok(data=container.pool_service.list_pools())
-    except Exception as exc:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
         return error("Failed to list pools", 500)
 
 

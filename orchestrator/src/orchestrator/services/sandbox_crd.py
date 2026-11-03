@@ -423,26 +423,6 @@ class SandboxCRDService:
         if metadata:
             self.crd.patch(sandbox_id, {"metadata": metadata})
 
-    def mark_allocated(
-        self,
-        sandbox_id: str,
-        *,
-        labels: dict[str, str],
-        annotations: dict[str, str],
-        ttl_seconds: int,
-    ) -> None:
-        annotations["litterbox.io/updated-at"] = utcnow().isoformat()
-        self.crd.patch(
-            sandbox_id,
-            {
-                "metadata": {"labels": labels, "annotations": annotations},
-                "spec": {
-                    "ttlSeconds": ttl_seconds,
-                    "ttlAnchor": utcnow().isoformat() if ttl_seconds > 0 else None,
-                },
-            },
-        )
-
     def set_ttl(self, sandbox_id: str, ttl_seconds: int) -> None:
         self.crd.patch(
             sandbox_id,
@@ -490,17 +470,6 @@ class SandboxCRDService:
                     }
                 },
                 "spec": spec,
-            },
-        )
-
-    def set_pool_state(self, sandbox_id: str, pool_state: str) -> None:
-        self.crd.patch(
-            sandbox_id,
-            {
-                "metadata": {
-                    "labels": {"litterbox.io/pool-state": pool_state},
-                    "annotations": {"litterbox.io/updated-at": utcnow().isoformat()},
-                }
             },
         )
 

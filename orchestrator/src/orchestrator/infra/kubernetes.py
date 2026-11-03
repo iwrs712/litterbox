@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
 from contextlib import suppress
-from datetime import datetime
 import json
-import os
 import threading
 import time
 from typing import Any
@@ -112,10 +109,6 @@ class KubernetesGateway:
     def list_pods(self, label_selector: str) -> list[client.V1Pod]:
         return self.core.list_namespaced_pod(self.namespace, label_selector=label_selector).items
 
-    def delete_pod(self, name: str, grace_period_seconds: int = 0) -> None:
-        body = client.V1DeleteOptions(grace_period_seconds=grace_period_seconds)
-        self.core.delete_namespaced_pod(name, self.namespace, body=body)
-
     def wait_for_pod_ready(self, label_selector: str, timeout_seconds: int = 120) -> client.V1Pod:
         deadline = time.time() + timeout_seconds
         last_error: str | None = None
@@ -202,11 +195,3 @@ class KubernetesGateway:
             if exc.status == 404:
                 return False
             raise
-
-    def cleanup_named_resources(self, names: Iterable[str]) -> None:
-        for name in names:
-            self.delete_configmap(name)
-
-    @staticmethod
-    def timestamp(value: datetime | None) -> str | None:
-        return value.isoformat() if value else None

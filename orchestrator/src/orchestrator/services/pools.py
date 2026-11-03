@@ -56,9 +56,6 @@ class PoolService:
         self.repository.save(pool)
         return self.get_pool_status(template_id)
 
-    def get_pool(self, template_id: str) -> Pool | None:
-        return self.repository.get(template_id)
-
     def get_pool_status(self, template_id: str) -> PoolStatus:
         pool = self.repository.get(template_id)
         if pool is None:

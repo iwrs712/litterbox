@@ -11,7 +11,7 @@ from orchestrator.domain.e2b_models import (
 )
 from orchestrator.domain.models import AllocateSandboxRequest, SandboxStatus
 from orchestrator.services.pools import PoolService
-from orchestrator.services.sandboxes import SandboxResumeLockedError, SandboxService
+from orchestrator.services.sandboxes import SandboxService
 
 
 class E2BUnsupportedOperationError(RuntimeError):

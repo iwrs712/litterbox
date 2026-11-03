@@ -109,12 +109,6 @@ type Sandbox struct {
 	Status SandboxStatus `json:"status,omitempty"`
 }
 
-type SandboxList struct {
-	metav1.TypeMeta `json:",inline"`
-	metav1.ListMeta `json:"metadata,omitempty"`
-	Items           []Sandbox `json:"items"`
-}
-
 type SandboxPoolSpec struct {
 	TemplateID      string      `json:"templateID"`
 	SandboxTemplate SandboxSpec `json:"sandboxTemplate"`
@@ -138,10 +132,4 @@ type SandboxPool struct {
 
 	Spec   SandboxPoolSpec   `json:"spec,omitempty"`
 	Status SandboxPoolStatus `json:"status,omitempty"`
-}
-
-type SandboxPoolList struct {
-	metav1.TypeMeta `json:",inline"`
-	metav1.ListMeta `json:"metadata,omitempty"`
-	Items           []SandboxPool `json:"items"`
 }
