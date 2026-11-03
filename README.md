@@ -273,6 +273,7 @@ Configuration comes from `config.toml`, overridden by `ORCHESTRATOR__<SECTION>__
 | [**docs/api-reference.md**](docs/api-reference.md) | Full API reference |
 | [**docs/configuration.md**](docs/configuration.md) | All configuration options |
 | [**docs/development.md**](docs/development.md) | Local development |
+| [**docs/local-k3s-e2b-deployment.md**](docs/local-k3s-e2b-deployment.md) | Local Colima + k3s deployment notes |
 
 <br>
 

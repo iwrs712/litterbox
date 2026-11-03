@@ -1,0 +1,628 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Litterbox Architecture</title>
+  <style>
+    :root {
+      --bg: #f5f7fb;
+      --ink: #172033;
+      --muted: #667085;
+      --line: #d9dfeb;
+      --control: #7c3aed;
+      --control-soft: #f3e8ff;
+      --data: #0f9f7a;
+      --data-soft: #e7fbf4;
+      --state: #d97706;
+      --state-soft: #fff7e6;
+      --k8s: #2563eb;
+      --k8s-soft: #edf4ff;
+      --external: #64748b;
+      --external-soft: #f8fafc;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 8% 0%, rgba(124, 58, 237, .09), transparent 28rem),
+        radial-gradient(circle at 92% 100%, rgba(15, 159, 122, .09), transparent 30rem),
+        var(--bg);
+      font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
+    }
+
+    .page {
+      width: min(1880px, calc(100vw - 32px));
+      margin: 24px auto 48px;
+    }
+
+    header {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 24px;
+      padding: 8px 4px 20px;
+    }
+
+    .eyebrow {
+      margin: 0 0 8px;
+      color: var(--control);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(28px, 4vw, 46px);
+      letter-spacing: -.035em;
+    }
+
+    .subtitle {
+      max-width: 760px;
+      margin: 10px 0 0;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.7;
+    }
+
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding-bottom: 4px;
+    }
+
+    button {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(255,255,255,.86);
+      color: var(--muted);
+      cursor: pointer;
+      font: inherit;
+      font-size: 13px;
+      font-weight: 650;
+      padding: 8px 13px;
+      transition: .16s ease;
+    }
+
+    button:hover { transform: translateY(-1px); border-color: #b8c1d2; }
+    button.active { color: white; background: var(--ink); border-color: var(--ink); }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 18px;
+      padding: 0 4px 14px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .legend span { display: inline-flex; align-items: center; gap: 7px; }
+    .dot { width: 9px; height: 9px; border-radius: 50%; }
+    .dot.control { background: var(--control); }
+    .dot.data { background: var(--data); }
+    .dot.state { background: var(--state); }
+    .dot.k8s { background: var(--k8s); }
+
+    .scroll {
+      overflow-x: auto;
+      border-radius: 22px;
+      box-shadow: 0 22px 55px rgba(23, 32, 51, .12);
+    }
+
+    .diagram {
+      position: relative;
+      width: 1800px;
+      height: 1080px;
+      overflow: hidden;
+      border: 1px solid #e0e5ee;
+      border-radius: 22px;
+      background: rgba(255,255,255,.9);
+    }
+
+    .lane {
+      position: absolute;
+      left: 20px;
+      width: 1760px;
+      border: 1px solid rgba(124, 58, 237, .2);
+      border-radius: 18px;
+      background: linear-gradient(135deg, rgba(243,232,255,.55), rgba(255,255,255,.7));
+    }
+
+    .control-lane { top: 20px; height: 496px; }
+    .data-lane {
+      top: 548px;
+      height: 512px;
+      border-color: rgba(15, 159, 122, .22);
+      background: linear-gradient(135deg, rgba(231,251,244,.66), rgba(255,255,255,.72));
+    }
+
+    .lane-title {
+      position: absolute;
+      left: 24px;
+      top: 16px;
+      font-size: 15px;
+      font-weight: 850;
+      letter-spacing: .02em;
+    }
+
+    .control-lane .lane-title { color: var(--control); }
+    .data-lane .lane-title { color: var(--data); }
+
+    .lane-kicker {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: .04em;
+      margin-left: 9px;
+    }
+
+    .node, .node-group {
+      position: absolute;
+      z-index: 3;
+      border: 1.5px solid var(--line);
+      border-radius: 13px;
+      background: rgba(255,255,255,.96);
+      box-shadow: 0 6px 18px rgba(23, 32, 51, .07);
+      transition: opacity .2s ease, transform .2s ease, box-shadow .2s ease;
+    }
+
+    .node { display: flex; flex-direction: column; justify-content: center; padding: 10px 12px; }
+    .node:hover, .node-group:hover { transform: translateY(-2px); box-shadow: 0 10px 24px rgba(23,32,51,.12); }
+    .node strong { display: block; font-size: 13px; line-height: 1.25; }
+    .node small { display: block; margin-top: 5px; color: var(--muted); font-size: 10.5px; line-height: 1.35; }
+    .node code { font-size: 10.5px; color: #475467; }
+
+    .node.control { border-color: rgba(124,58,237,.34); background: #fcfaff; }
+    .node.data { border-color: rgba(15,159,122,.35); background: #fbfffd; }
+    .node.state { border-color: rgba(217,119,6,.32); background: #fffdf7; }
+    .node.k8s { border-color: rgba(37,99,235,.3); background: #fbfdff; }
+    .node.external { border-color: rgba(100,116,139,.3); background: #fcfdff; }
+
+    .node-group {
+      padding: 0;
+      background: rgba(255,255,255,.58);
+      box-shadow: none;
+    }
+
+    .group-title {
+      position: absolute;
+      top: 10px;
+      left: 13px;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: .02em;
+      color: #475467;
+    }
+
+    .tag {
+      display: inline-flex;
+      width: fit-content;
+      margin-top: 7px;
+      border-radius: 999px;
+      padding: 2px 7px;
+      font-size: 9px;
+      font-weight: 800;
+      letter-spacing: .04em;
+      color: var(--control);
+      background: var(--control-soft);
+    }
+    .tag.data { color: var(--data); background: var(--data-soft); }
+    .tag.state { color: var(--state); background: var(--state-soft); }
+
+    .clients-panel {
+      left: 30px;
+      top: 66px;
+      width: 220px;
+      height: 388px;
+      border-color: rgba(99,102,241,.28);
+      background: rgba(238,242,255,.58);
+    }
+    .clients-panel .group-title { position: static; padding: 12px 14px 0; }
+    .clients-panel .node { width: 180px; left: 20px; }
+
+    .card-dashboard { top: 54px; height: 80px; }
+    .card-rest { top: 151px; height: 68px; }
+    .card-sdk { top: 236px; height: 112px; }
+
+    #ctrl-auth { left: 300px; top: 142px; width: 150px; height: 86px; }
+    #native-api { left: 492px; top: 91px; width: 210px; height: 75px; }
+    #e2b-api { left: 492px; top: 202px; width: 210px; height: 75px; }
+
+    #services-group { left: 740px; top: 65px; width: 330px; height: 310px; }
+    .service-card { width: 140px; height: 58px; padding: 8px 10px; }
+    .service-card strong { font-size: 11.5px; }
+    .service-card small { margin-top: 2px; font-size: 9px; }
+    #svc-template { left: 15px; top: 48px; }
+    #svc-sandbox  { left: 170px; top: 48px; }
+    #svc-pool     { left: 15px; top: 120px; }
+    #svc-e2b      { left: 170px; top: 120px; }
+    #svc-expose   { left: 15px; top: 192px; }
+    #svc-webhook  { left: 170px; top: 192px; }
+
+    #configmaps { left: 730px; top: 405px; width: 145px; height: 57px; }
+    #redis { left: 892px; top: 405px; width: 145px; height: 57px; }
+    #controllers { left: 1077px; top: 232px; width: 190px; height: 90px; }
+    #workers { left: 1077px; top: 384px; width: 190px; height: 90px; }
+    #ctrl-k8s-api { left: 1110px; top: 118px; width: 158px; height: 82px; }
+    #ctrl-k8s-connector { left: 1316px; top: 154px; width: 72px; height: 10px; opacity: 0; }
+    #webhook-target { left: 1371px; top: 395px; width: 165px; height: 62px; }
+
+    #resources-group { left: 1420px; top: 65px; width: 310px; height: 292px; }
+    .resource-card { width: 132px; height: 68px; padding: 8px 9px; }
+    .resource-card strong { font-size: 11px; }
+    .resource-card small { font-size: 9px; }
+    #res-deploy { left: 14px; top: 50px; }
+    #res-service { left: 158px; top: 50px; }
+    #res-pvc { left: 14px; top: 132px; }
+    #res-pod { left: 158px; top: 132px; }
+    #res-runtime { left: 14px; top: 214px; width: 276px; height: 58px; }
+
+    #data-dashboard { top: 64px; height: 82px; }
+    #data-sdk { top: 158px; height: 106px; }
+    #data-clients { height: 292px; }
+
+    #data-auth { left: 300px; top: 146px; width: 155px; height: 82px; }
+    #envd-proxy { left: 510px; top: 108px; width: 205px; height: 122px; }
+    #pod-lookup { left: 510px; top: 292px; width: 205px; height: 76px; }
+    #data-sandbox { left: 780px; top: 62px; width: 610px; height: 350px; }
+    #main-container { left: 24px; top: 216px; width: 170px; height: 62px; }
+    #envd { left: 24px; top: 92px; width: 170px; height: 78px; }
+    #files-api { left: 235px; top: 50px; width: 165px; height: 62px; }
+    #process-api { left: 235px; top: 132px; width: 165px; height: 62px; }
+    #pty-api { left: 235px; top: 214px; width: 165px; height: 62px; }
+    #workspace-pvc { left: 440px; top: 122px; width: 145px; height: 84px; }
+    .sandbox-badge { position: absolute; z-index: 3; border-radius: 999px; padding: 4px 9px; font-size: 9px; font-weight: 750; }
+    #runtime-class { left: 24px; top: 302px; color: #2459bb; background: #edf4ff; }
+    #network-policy { left: 134px; top: 302px; color: #2459bb; background: #edf4ff; }
+
+    .edge { fill: none; stroke-width: 1.65; opacity: .9; }
+    .edge-control { stroke: var(--control); }
+    .edge-data { stroke: var(--data); }
+    .edge-k8s { stroke: var(--k8s); }
+    .edge-muted { stroke: var(--external); stroke-dasharray: 5 5; }
+    .edge-label {
+      font-size: 10px;
+      font-weight: 650;
+      fill: #667085;
+      paint-order: stroke;
+      stroke: rgba(255,255,255,.96);
+      stroke-width: 5px;
+      stroke-linejoin: round;
+    }
+    #edges { position: absolute; inset: 0; width: 1800px; height: 1080px; z-index: 2; pointer-events: none; }
+    .node, .node-group, .lane-title, .clients-panel, .sandbox-badge { z-index: 3; }
+
+    .diagram[data-mode="control"] .data-only { opacity: .12; }
+    .diagram[data-mode="data"] .control-only { opacity: .12; }
+    .diagram[data-mode="control"] .edge-data { opacity: .08; }
+    .diagram[data-mode="data"] .edge-control { opacity: .08; }
+    .diagram[data-mode="control"] .data-lane { opacity: .24; }
+    .diagram[data-mode="data"] .control-lane { opacity: .24; }
+
+    .footnote {
+      margin: 14px 4px 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.6;
+    }
+  </style>
+</head>
+<body>
+<div class="page">
+  <header>
+    <div>
+      <p class="eyebrow">System Architecture</p>
+      <h1>Litterbox 架构</h1>
+      <p class="subtitle">
+        控制面负责管理 Sandbox 的期望状态；数据面负责在已经就绪的 Sandbox 内执行命令、读写文件并提供 PTY。
+        同一套 Dashboard 和 E2B SDK 会按操作类型进入不同链路。
+      </p>
+    </div>
+    <div class="toolbar" role="group" aria-label="链路高亮">
+      <button class="active" data-mode="all">全部</button>
+      <button data-mode="control">只看控制面</button>
+      <button data-mode="data">只看数据面</button>
+    </div>
+  </header>
+
+  <div class="legend">
+    <span><i class="dot control"></i>控制面</span>
+    <span><i class="dot data"></i>数据面</span>
+    <span><i class="dot state"></i>状态存储</span>
+    <span><i class="dot k8s"></i>Kubernetes</span>
+    <span>虚线表示解析、创建或异步关系</span>
+  </div>
+
+  <div class="scroll">
+    <div class="diagram" id="diagram" data-mode="all">
+      <svg id="edges" viewBox="0 0 1800 1080" aria-hidden="true">
+        <defs>
+          <marker id="arrow-control" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L8,4 L0,8 z" fill="#7c3aed"/>
+          </marker>
+          <marker id="arrow-data" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L8,4 L0,8 z" fill="#0f9f7a"/>
+          </marker>
+          <marker id="arrow-k8s" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L8,4 L0,8 z" fill="#2563eb"/>
+          </marker>
+          <marker id="arrow-muted" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L8,4 L0,8 z" fill="#64748b"/>
+          </marker>
+          <marker id="arrow-control-start" markerWidth="8" markerHeight="8" refX="1" refY="4" orient="auto" markerUnits="strokeWidth">
+            <path d="M8,0 L0,4 L8,8 z" fill="#7c3aed"/>
+          </marker>
+          <marker id="arrow-data-start" markerWidth="8" markerHeight="8" refX="1" refY="4" orient="auto" markerUnits="strokeWidth">
+            <path d="M8,0 L0,4 L8,8 z" fill="#0f9f7a"/>
+          </marker>
+        </defs>
+      </svg>
+
+      <section class="lane control-lane control-only">
+        <div class="lane-title">控制面 <span class="lane-kicker">管理 Sandbox 期望状态</span></div>
+
+        <div class="node-group clients-panel control-only">
+          <div class="group-title">管理入口</div>
+          <div class="node control card-dashboard" id="ctrl-dashboard">
+            <strong>Dashboard</strong>
+            <small>模板 · 池 · Sandbox 管理页面</small>
+            <span class="tag">CONTROL</span>
+          </div>
+          <div class="node control card-rest" id="ctrl-rest">
+            <strong>REST Client</strong>
+            <small>直接调用管理 API</small>
+            <span class="tag">CONTROL</span>
+          </div>
+          <div class="node control card-sdk" id="ctrl-sdk">
+            <strong>E2B SDK</strong>
+            <small>create · connect · pause · kill</small>
+            <span class="tag">LIFECYCLE</span>
+          </div>
+        </div>
+
+        <div class="node control" id="ctrl-auth">
+          <strong>Control Auth</strong>
+          <small>Bearer Token<br>E2B X-API-Key</small>
+        </div>
+
+        <div class="node control" id="native-api">
+          <strong>Native REST API</strong>
+          <small><code>/api/v1</code><br>Sandbox · Template · Pool</small>
+        </div>
+
+        <div class="node control" id="e2b-api">
+          <strong>E2B Control API</strong>
+          <small><code>/e2b</code><br>lifecycle facade</small>
+        </div>
+
+        <div class="node-group" id="services-group">
+          <div class="group-title">Orchestrator Services</div>
+          <div class="node control service-card" id="svc-template"><strong>Template</strong><small>模板定义</small></div>
+          <div class="node control service-card" id="svc-sandbox"><strong>Sandbox</strong><small>CR 生命周期 · TTL</small></div>
+          <div class="node control service-card" id="svc-pool"><strong>Pool</strong><small>声明与领取</small></div>
+          <div class="node control service-card" id="svc-e2b"><strong>E2B Service</strong><small>控制面适配</small></div>
+          <div class="node control service-card" id="svc-expose"><strong>Expose</strong><small>Service · Ingress</small></div>
+          <div class="node control service-card" id="svc-webhook"><strong>Webhook</strong><small>事件与投递</small></div>
+        </div>
+
+        <div class="node state" id="configmaps">
+          <strong>ConfigMaps</strong>
+          <small>templates · webhooks</small>
+        </div>
+        <div class="node state" id="redis">
+          <strong>Redis</strong>
+          <small>Celery · webhooks</small>
+        </div>
+        <div class="node k8s" id="controllers">
+          <strong>Sandbox Controller</strong>
+          <small>Sandbox + SandboxPool<br>reconcile · leader election</small>
+        </div>
+        <div class="node control" id="workers">
+          <strong>Webhook Worker</strong>
+          <small>Celery · webhook delivery</small>
+        </div>
+        <div class="node k8s" id="ctrl-k8s-api">
+          <strong>Kubernetes API</strong>
+          <small>create · patch · delete</small>
+        </div>
+        <div class="node-group" id="resources-group">
+          <div class="group-title">Sandbox Resources</div>
+          <div class="node k8s resource-card" id="res-deploy"><strong>Sandbox CR</strong><small>SandboxPool · warm supply</small></div>
+          <div class="node k8s resource-card" id="res-service"><strong>Service</strong><small>runtime routing</small></div>
+          <div class="node k8s resource-card" id="res-pvc"><strong>Workspace PVC</strong><small>persistent data</small></div>
+          <div class="node k8s resource-card" id="res-pod"><strong>Kata Pod / VM</strong><small>isolated workload</small></div>
+          <div class="node k8s resource-card" id="res-runtime"><strong>Ingress · RuntimeClass · NetworkPolicy</strong><small>exposure and isolation</small></div>
+        </div>
+        <div class="node external" id="webhook-target">
+          <strong>Webhook Receiver</strong>
+          <small>external endpoint</small>
+        </div>
+      </section>
+
+      <section class="lane data-lane data-only">
+        <div class="lane-title">数据面 <span class="lane-kicker">在已就绪 Sandbox 内执行操作</span></div>
+
+        <div class="node-group clients-panel" id="data-clients" style="top:66px;height:292px">
+          <div class="group-title">运行时入口</div>
+          <div class="node data card-dashboard" id="data-dashboard">
+            <strong>Dashboard</strong>
+            <small>终端 · 文件视图</small>
+            <span class="tag data">RUNTIME UI</span>
+          </div>
+          <div class="node data card-sdk" id="data-sdk" style="top:158px;height:106px">
+            <strong>E2B SDK</strong>
+            <small>exec · files · PTY</small>
+            <span class="tag data">RUNTIME</span>
+          </div>
+        </div>
+
+        <div class="node data" id="data-auth">
+          <strong>Auth + Routing</strong>
+          <small>Bearer / X-API-Key<br>path or wildcard host</small>
+        </div>
+        <div class="node data" id="envd-proxy">
+          <strong>envd proxy</strong>
+          <small>resolve ready Pod<br>cache · retry<br>stream request / response</small>
+        </div>
+        <div class="node k8s" id="pod-lookup">
+          <strong>Kubernetes API</strong>
+          <small>ready Pod lookup</small>
+        </div>
+
+        <div class="node-group" id="data-sandbox">
+          <div class="group-title">Kata Sandbox · main container</div>
+          <div class="node data" id="main-container">
+            <strong>Main Container</strong>
+            <small>workload process</small>
+          </div>
+          <div class="node data" id="envd">
+            <strong>envd</strong>
+            <small>:49983 data-plane agent</small>
+          </div>
+          <div class="node data" id="files-api">
+            <strong>Filesystem API</strong>
+            <small>/files · ConnectRPC</small>
+          </div>
+          <div class="node data" id="process-api">
+            <strong>Process API</strong>
+            <small>start · input · signal</small>
+          </div>
+          <div class="node data" id="pty-api">
+            <strong>PTY</strong>
+            <small>terminal output stream</small>
+          </div>
+          <div class="node state" id="workspace-pvc">
+            <strong>Mounted /workspace</strong>
+            <small>from Workspace PVC</small>
+          </div>
+          <div class="sandbox-badge" id="runtime-class">Kata RuntimeClass</div>
+          <div class="sandbox-badge" id="network-policy">NetworkPolicy optional</div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <p class="footnote">
+    说明：E2B SDK 同时参与两个平面。生命周期方法进入 <code>/e2b</code> 控制链，运行时方法进入 envd 数据链。
+    Dashboard 的管理页面走控制面，终端与文件视图走数据面。
+  </p>
+</div>
+
+<script>
+  const diagram = document.getElementById('diagram');
+  const svg = document.getElementById('edges');
+  const NS = 'http://www.w3.org/2000/svg';
+
+  function centerInDiagram(el) {
+    const dr = diagram.getBoundingClientRect();
+    const r = el.getBoundingClientRect();
+    return {
+      left: r.left - dr.left,
+      right: r.right - dr.left,
+      top: r.top - dr.top,
+      bottom: r.bottom - dr.top,
+      cx: (r.left + r.right) / 2 - dr.left,
+      cy: (r.top + r.bottom) / 2 - dr.top
+    };
+  }
+
+  function endpoint(id, side) {
+    const r = centerInDiagram(document.getElementById(id));
+    if (side === 'left') return { x: r.left, y: r.cy };
+    if (side === 'right') return { x: r.right, y: r.cy };
+    if (side === 'top') return { x: r.cx, y: r.top };
+    return { x: r.cx, y: r.bottom };
+  }
+
+  function addText(x, y, text, cls) {
+    const t = document.createElementNS(NS, 'text');
+    t.setAttribute('x', x);
+    t.setAttribute('y', y);
+    t.setAttribute('text-anchor', 'middle');
+    t.setAttribute('class', cls);
+    t.textContent = text;
+    svg.appendChild(t);
+  }
+
+  function drawEdge(spec) {
+    const source = endpoint(spec.from, spec.fromSide);
+    const target = endpoint(spec.to, spec.toSide);
+    let d;
+    if (spec.fromSide === 'right' && spec.toSide === 'left') {
+      const dx = Math.max(40, (target.x - source.x) * 0.46);
+      d = `M ${source.x} ${source.y} C ${source.x + dx} ${source.y}, ${target.x - dx} ${target.y}, ${target.x} ${target.y}`;
+    } else if (spec.fromSide === 'bottom' && spec.toSide === 'top') {
+      const dy = Math.max(34, (target.y - source.y) * 0.42);
+      d = `M ${source.x} ${source.y} C ${source.x} ${source.y + dy}, ${target.x} ${target.y - dy}, ${target.x} ${target.y}`;
+    } else {
+      const dx = Math.max(38, (target.x - source.x) * 0.42);
+      const dy = Math.max(30, (target.y - source.y) * 0.42);
+      d = `M ${source.x} ${source.y} C ${source.x + dx} ${source.y + dy}, ${target.x - dx} ${target.y - dy}, ${target.x} ${target.y}`;
+    }
+
+    const path = document.createElementNS(NS, 'path');
+    path.setAttribute('d', d);
+    path.setAttribute('class', `edge ${spec.className || 'edge-control'} ${spec.dashed ? 'edge-muted' : ''}`);
+    if (spec.twoWay) path.setAttribute('marker-start', `url(#${spec.startMarker || 'arrow-control-start'})`);
+    path.setAttribute('marker-end', `url(#${spec.marker || 'arrow-control'})`);
+    svg.appendChild(path);
+
+    if (spec.label) {
+      const x = (source.x + target.x) / 2;
+      const y = (source.y + target.y) / 2 - 7;
+      addText(x, y, spec.label, 'edge-label');
+    }
+  }
+
+  const edges = [
+    { from: 'ctrl-dashboard', to: 'ctrl-auth', fromSide: 'right', toSide: 'left', twoWay: true },
+    { from: 'ctrl-rest', to: 'ctrl-auth', fromSide: 'right', toSide: 'left', twoWay: true },
+    { from: 'ctrl-sdk', to: 'ctrl-auth', fromSide: 'right', toSide: 'left', twoWay: true },
+    { from: 'ctrl-auth', to: 'native-api', fromSide: 'right', toSide: 'left' },
+    { from: 'ctrl-auth', to: 'e2b-api', fromSide: 'right', toSide: 'left' },
+    { from: 'native-api', to: 'services-group', fromSide: 'right', toSide: 'left', label: 'route' },
+    { from: 'e2b-api', to: 'services-group', fromSide: 'right', toSide: 'left' },
+    { from: 'services-group', to: 'configmaps', fromSide: 'bottom', toSide: 'top', label: 'metadata' },
+    { from: 'services-group', to: 'redis', fromSide: 'bottom', toSide: 'top', label: 'queue' },
+    { from: 'services-group', to: 'workers', fromSide: 'bottom', toSide: 'top', label: 'webhook tasks' },
+    { from: 'services-group', to: 'ctrl-k8s-api', fromSide: 'top', toSide: 'left', label: 'desired state' },
+    { from: 'ctrl-k8s-api', to: 'controllers', fromSide: 'bottom', toSide: 'top', label: 'watch', dashed: true, className: 'edge-k8s', marker: 'arrow-k8s' },
+    { from: 'controllers', to: 'resources-group', fromSide: 'right', toSide: 'left', label: 'reconcile', dashed: true, className: 'edge-k8s', marker: 'arrow-k8s' },
+    { from: 'workers', to: 'webhook-target', fromSide: 'right', toSide: 'left', label: 'deliver', dashed: true, className: 'edge-muted', marker: 'arrow-muted' },
+    { from: 'ctrl-k8s-api', to: 'resources-group', fromSide: 'right', toSide: 'left', label: 'Sandbox / Pool CRs', className: 'edge-k8s', marker: 'arrow-k8s' },
+    { from: 'data-dashboard', to: 'data-auth', fromSide: 'right', toSide: 'left', className: 'edge-data', marker: 'arrow-data', startMarker: 'arrow-data-start', twoWay: true },
+    { from: 'data-sdk', to: 'data-auth', fromSide: 'right', toSide: 'left', className: 'edge-data', marker: 'arrow-data', startMarker: 'arrow-data-start', twoWay: true },
+    { from: 'data-auth', to: 'envd-proxy', fromSide: 'right', toSide: 'left', className: 'edge-data', marker: 'arrow-data' },
+    { from: 'envd-proxy', to: 'pod-lookup', fromSide: 'bottom', toSide: 'top', label: 'resolve / refresh', dashed: true, className: 'edge-k8s', marker: 'arrow-k8s' },
+    { from: 'envd-proxy', to: 'envd', fromSide: 'right', toSide: 'left', label: 'stream', className: 'edge-data', marker: 'arrow-data', startMarker: 'arrow-data-start', twoWay: true },
+    { from: 'main-container', to: 'envd', fromSide: 'right', toSide: 'left', className: 'edge-data', marker: 'arrow-data' },
+    { from: 'envd', to: 'files-api', fromSide: 'right', toSide: 'left', className: 'edge-data', marker: 'arrow-data' },
+    { from: 'envd', to: 'process-api', fromSide: 'right', toSide: 'left', className: 'edge-data', marker: 'arrow-data' },
+    { from: 'envd', to: 'pty-api', fromSide: 'right', toSide: 'left', className: 'edge-data', marker: 'arrow-data' },
+    { from: 'files-api', to: 'workspace-pvc', fromSide: 'right', toSide: 'left', className: 'edge-data', marker: 'arrow-data', startMarker: 'arrow-data-start', twoWay: true }
+  ];
+
+  function draw() {
+    svg.querySelectorAll('path.edge, text.edge-label').forEach(el => el.remove());
+    edges.forEach(drawEdge);
+  }
+
+  document.querySelectorAll('[data-mode]').forEach(button => {
+    button.addEventListener('click', () => {
+      document.querySelectorAll('[data-mode]').forEach(b => b.classList.remove('active'));
+      button.classList.add('active');
+      diagram.dataset.mode = button.dataset.mode;
+    });
+  });
+
+  window.addEventListener('load', draw);
+  window.addEventListener('resize', draw);
+</script>
+</body>
+</html>

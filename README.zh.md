@@ -274,6 +274,7 @@ sandbox.kill()                        # 永久删除，同时删除 workspace PV
 | [**docs/api-reference.md**](docs/api-reference.md) | 完整 API 文档 |
 | [**docs/configuration.md**](docs/configuration.md) | 配置项说明 |
 | [**docs/development.md**](docs/development.md) | 本地开发 |
+| [**docs/local-k3s-e2b-deployment.md**](docs/local-k3s-e2b-deployment.md) | 本地 Colima + k3s 部署记录 |
 
 <br>
 
