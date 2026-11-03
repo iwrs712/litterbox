@@ -2,7 +2,6 @@ from __future__ import annotations
 
 WORKER_QUEUES = {
     "webhook": "webhook_delivery",
-    "pool": "pool_reconcile",
 }
 
 

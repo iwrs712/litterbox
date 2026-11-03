@@ -10,21 +10,10 @@ from orchestrator.domain.models import (
     AllocateSandboxRequest,
     CreateTemplateRequest,
     Pool,
-    PoolState,
     Template,
     WorkspaceConfigOverride,
 )
 from orchestrator.services.pools import PoolService
-from orchestrator.services.sandboxes import SandboxService
-
-
-class DummyGateway:
-    namespace = "default"
-    available_runtime_classes: set[str] = set()
-
-    @staticmethod
-    def secret_exists(_name: str) -> bool:
-        return False
 
 
 def test_allocate_sandbox_rejects_env_when_pool_enabled() -> None:
@@ -139,43 +128,3 @@ def test_pool_ttl_preserves_template_zero_ttl() -> None:
     )
 
     assert service._pool_ttl_seconds("tpl-zero-ttl") == 0
-
-
-def test_build_deployment_merges_template_env_and_runtime_env() -> None:
-    now = datetime.now(tz=UTC)
-    template = Template(
-        id="tpl-1",
-        name="template",
-        image="busybox:latest",
-        env=["BASE=1", "SHARED=from-template"],
-        cpu_millicores=500,
-        memory_mb=512,
-        created_at=now,
-        updated_at=now,
-    )
-
-    service = SandboxService(
-        gateway=DummyGateway(),
-        template_service=SimpleNamespace(),
-        webhook_dispatcher=SimpleNamespace(),
-        ttl_queue=SimpleNamespace(),
-        settings=Settings(),
-    )
-
-    deployment = service._build_deployment(
-        sandbox_id="sbx-1",
-        template=template,
-        metadata={},
-        name="sandbox",
-        env=["SHARED=from-request", "RUNTIME=1"],
-        pool_state=PoolState.NONE,
-        ttl_seconds=None,
-    )
-
-    env_items = deployment.spec.template.spec.containers[0].env or []
-    env_map = {item.name: item.value for item in env_items}
-    assert env_map == {
-        "BASE": "1",
-        "SHARED": "from-request",
-        "RUNTIME": "1",
-    }

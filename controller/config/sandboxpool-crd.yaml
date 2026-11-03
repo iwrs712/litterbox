@@ -1,0 +1,82 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: sandboxpools.litterbox.io
+spec:
+  group: litterbox.io
+  scope: Namespaced
+  names:
+    kind: SandboxPool
+    listKind: SandboxPoolList
+    plural: sandboxpools
+    singular: sandboxpool
+    shortNames:
+      - sbxp
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Target
+          type: integer
+          jsonPath: .spec.targetReady
+        - name: Ready
+          type: integer
+          jsonPath: .status.ready
+        - name: Creating
+          type: integer
+          jsonPath: .status.creating
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required:
+                - templateID
+                - sandboxTemplate
+                - targetReady
+              properties:
+                templateID:
+                  type: string
+                targetReady:
+                  type: integer
+                  format: int32
+                  minimum: 0
+                minReady:
+                  type: integer
+                  format: int32
+                  minimum: 0
+                maxCreating:
+                  type: integer
+                  format: int32
+                  minimum: 1
+                sandboxTemplate:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+            status:
+              type: object
+              properties:
+                ready:
+                  type: integer
+                  format: int32
+                creating:
+                  type: integer
+                  format: int32
+                allocated:
+                  type: integer
+                  format: int32
+                failed:
+                  type: integer
+                  format: int32
+                terminating:
+                  type: integer
+                  format: int32
+                observedGeneration:
+                  type: integer
+                  format: int64

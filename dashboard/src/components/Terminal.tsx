@@ -4,7 +4,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
 import { apiClient } from '@/lib/api';
-import { openEnvdTerminal } from '@/lib/envd';
+import { openEnvdTerminal, type EnvdTerminalSession } from '@/lib/envd';
 
 interface TerminalProps {
   sandboxId: string;
@@ -55,7 +55,7 @@ export function Terminal({ sandboxId }: TerminalProps) {
     term.loadAddon(new WebLinksAddon());
     term.open(terminalRef.current);
 
-    let session: ReturnType<typeof openEnvdTerminal> | undefined;
+    let session: EnvdTerminalSession | undefined;
     const fit = (notify = false) => {
       try {
         fitAddon.fit();
@@ -64,7 +64,6 @@ export function Terminal({ sandboxId }: TerminalProps) {
     };
 
     fit();
-    session = openEnvdTerminal(sandboxId, { cols: Math.max(1, term.cols), rows: Math.max(1, term.rows) });
 
     let renewInterval: number | undefined;
 
@@ -91,6 +90,18 @@ export function Terminal({ sandboxId }: TerminalProps) {
 
     let disposed = false;
     void (async () => {
+      try {
+        session = await openEnvdTerminal(sandboxId, { cols: Math.max(1, term.cols), rows: Math.max(1, term.rows) });
+      } catch (error) {
+        if (!disposed) {
+          term.writeln(`\r\n[terminal connection error: ${error instanceof Error ? error.message : String(error)}]\r\n`);
+        }
+        return;
+      }
+      if (disposed) {
+        session.close();
+        return;
+      }
       for await (const data of session.output) {
         if (!disposed) term.write(data);
       }

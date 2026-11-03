@@ -224,14 +224,14 @@ Delete a template and its pool configuration. Existing sandboxes are not deleted
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `id` | string | Unique sandbox ID (also the Deployment name) |
+| `id` | string | Unique sandbox ID (also the Sandbox CR and Pod name) |
 | `name` | string | Display name set at allocation time |
 | `template_id` | string | Template used |
 | `image` | string | Container image from the template |
 | `cpu_millicores` | integer | CPU limit from the template |
 | `memory_mb` | integer | Memory limit from the template |
 | `status` | SandboxStatus | Current status |
-| `terminating` | boolean | Whether the Deployment is being deleted |
+| `terminating` | boolean | Whether the Sandbox CR is being deleted |
 | `pool_state` | string | Pool membership state |
 | `metadata` | object | Key-value metadata set at creation |
 | `allocated_at` | string? | When allocated from a pool |
@@ -245,7 +245,7 @@ Delete a template and its pool configuration. Existing sandboxes are not deleted
 
 **SandboxStatus values:** `created` · `creating` · `running` · `stopped` · `exited` · `unknown` · `pooled`
 
-`stopped` means the Deployment has been scaled to zero (suspended); the workspace PVC is retained.
+`stopped` means the sandbox is suspended: the controller removed the Pod and the workspace PVC is retained.
 
 **PoolState values:** `none` · `creating` · `available` · `allocated` · `failed`
 
@@ -344,7 +344,7 @@ Update `name` or `metadata`.
 
 #### `DELETE /api/v1/sandboxes/{sandbox_id}`
 
-Permanently delete the sandbox, its Deployment, its workspace PVC and TTL schedule. To stop compute while keeping the workspace, use `suspend`.
+Permanently delete the sandbox CR. Kubernetes garbage collection removes its Pod and workspace PVC through `ownerReference`. To stop compute while keeping the workspace, use `suspend`.
 
 ```json
 { "success": true, "message": "Sandbox deleted successfully" }
@@ -354,7 +354,7 @@ Permanently delete the sandbox, its Deployment, its workspace PVC and TTL schedu
 
 #### `POST /api/v1/sandboxes/{sandbox_id}/suspend`
 
-Scale the Deployment to zero. The workspace PVC is retained. The TTL keeps counting down while the sandbox is suspended, so a manual suspend does not by itself prevent later TTL expiry.
+Patch `spec.state` to `Paused`. The controller deletes the Pod and keeps the workspace PVC. The configured TTL is preserved; `resume` resets the TTL clock.
 
 ```json
 { "success": true, "data": { /* Sandbox */ }, "message": "Sandbox suspended successfully" }
@@ -364,7 +364,7 @@ Scale the Deployment to zero. The workspace PVC is retained. The TTL keeps count
 
 #### `POST /api/v1/sandboxes/{sandbox_id}/resume`
 
-Scale the Deployment back up. If the sandbox was suspended by TTL expiry, `resume` re-arms the TTL from the stored `ttl-seconds` annotation. Returns `409` if the sandbox is locked.
+Patch `spec.state` to `Running` and reset `spec.ttlAnchor`. The controller recreates the Pod. Returns `409` if the sandbox is locked.
 
 ---
 
@@ -410,7 +410,7 @@ Set the TTL explicitly.
 }
 ```
 
-When the TTL expires, the TTL loop **suspends** the sandbox (scale to zero, keep PVC) rather than deleting it.
+When the TTL expires, the controller **pauses** the sandbox (removes the Pod, keeps the PVC) and sets `status.pausedReason=TTLExpired` rather than deleting it.
 
 ---
 
@@ -496,7 +496,7 @@ Removes the Service and Ingress.
 
 ## Pools
 
-Pools maintain a warm inventory of pre-created sandboxes for low-latency allocation.
+Pools maintain a warm inventory of pre-created sandboxes for low-latency allocation. A pool is a `SandboxPool` custom resource; the controller maintains its supply. Allocation claims an `available` sandbox with an optimistic `resourceVersion` JSON Patch, so there is no global lock.
 
 ### Pool Status Object
 
@@ -541,7 +541,7 @@ Returns one Pool Status object.
 
 ### `PUT /api/v1/pools/{template_id}`
 
-Update any of `min_ready`, `target_ready`, `max_creating`. Triggers reconciliation.
+Update any of `min_ready`, `target_ready`, `max_creating`. The controller watches the `SandboxPool` CR and converges. Setting `min_ready` to `0` disables the pool and removes warm, non-allocated sandboxes.
 
 ### `DELETE /api/v1/pools/{template_id}`
 

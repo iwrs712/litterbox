@@ -1,15 +1,9 @@
 from __future__ import annotations
 
-import shlex
 import time
-from datetime import UTC, datetime
-
-from kubernetes import client
-from kubernetes.client import ApiException
 
 from orchestrator.config import Settings
 from orchestrator.domain.models import (
-    AllocateSandboxRequest,
     PoolState,
     QueryOptions,
     Sandbox,
@@ -24,11 +18,10 @@ from orchestrator.domain.models import (
 )
 from orchestrator.infra.kubernetes import KubernetesGateway
 from orchestrator.infra.sandbox_crd import SandboxCRDGateway
-from orchestrator.infra.ttl_queue import TTLEntry, TTLQueueRepository
-from orchestrator.services.sandbox_crd import SandboxCRDService, workspace_claim_name
+from orchestrator.services.sandbox_crd import SandboxCRDService
 from orchestrator.services.templates import TemplateService
 from orchestrator.services.webhooks import WebhookDispatcher
-from orchestrator.utils import is_valid_label_part, parse_env_list, short_id, utcnow
+from orchestrator.utils import is_valid_label_part, short_id
 
 
 class SandboxResumeLockedError(RuntimeError):
@@ -36,35 +29,29 @@ class SandboxResumeLockedError(RuntimeError):
 
 
 class SandboxService:
-    # Class-level default keeps hand-built test doubles working; production
-    # instances overwrite it in __init__ when the CRD backend is enabled.
-    crd: SandboxCRDService | None = None
+    """Writes Sandbox custom resources and reads controller-written status."""
 
     def __init__(
         self,
         gateway: KubernetesGateway,
         template_service: TemplateService,
         webhook_dispatcher: WebhookDispatcher,
-        ttl_queue: TTLQueueRepository,
         settings: Settings,
     ) -> None:
         self.gateway = gateway
         self.template_service = template_service
         self.webhook_dispatcher = webhook_dispatcher
-        self.ttl_queue = ttl_queue
         self.settings = settings
-        self.crd: SandboxCRDService | None = None
-        if settings.sandbox.backend == "crd":
-            self.crd = SandboxCRDService(
-                settings,
-                gateway,
-                SandboxCRDGateway(gateway, settings),
-            )
+        self.crd = SandboxCRDService(
+            settings,
+            gateway,
+            SandboxCRDGateway(gateway, settings),
+        )
         # Set after construction to avoid a circular dependency with
         # ServiceExposeService (which itself holds a SandboxService reference).
-        # container.py calls  sandbox_service.expose_service = expose_service
+        # container.py calls sandbox_service.expose_service = expose_service
         # after both objects have been built.
-        self.expose_service: "ServiceExposeService | None" = None  # type: ignore[name-defined]
+        self.expose_service = None
 
     def get_template(self, template_id: str) -> Template:
         return self.template_service.get_template(template_id)
@@ -84,24 +71,11 @@ class SandboxService:
     ) -> SandboxResponse:
         from orchestrator.services.metrics import sandbox_metrics  # 延迟导入，避免循环
 
-        if self.crd is not None:
-            return self._create_sandbox_crd(
-                template_id=template_id,
-                name=name,
-                metadata=metadata,
-                env=env,
-                pool_state=pool_state,
-                wait_ready=wait_ready,
-                dispatch_events=dispatch_events,
-                ttl_seconds=ttl_seconds,
-                workspace=workspace,
-            )
-
         metadata = metadata or {}
         template = self.template_service.get_template(template_id)
         sandbox_id = short_id()
         resolved_workspace = self._resolve_workspace(template, workspace)
-        deployment = self._build_deployment(
+        self.crd.create(
             sandbox_id=sandbox_id,
             template=template,
             metadata=metadata,
@@ -111,72 +85,10 @@ class SandboxService:
             ttl_seconds=ttl_seconds,
             workspace=resolved_workspace,
         )
-        workspace_claim = (
-            self._build_workspace_claim(sandbox_id, resolved_workspace)
-            if resolved_workspace.enabled
-            else None
-        )
-        if workspace_claim is not None:
-            self.gateway.create_persistent_volume_claim(workspace_claim)
-        try:
-            self.gateway.create_deployment(deployment)
-        except Exception:
-            if workspace_claim is not None:
-                self.gateway.delete_persistent_volume_claim(workspace_claim.metadata.name)
-            raise
-        self._sync_ttl_schedule(sandbox_id, deployment.metadata.annotations or {})
+
         pod = None
         # 只对用户直接等待的路径（wait_ready=True）记录指标；
         # Pool 预热使用 wait_ready=False，不计入用户体验耗时。
-        if wait_ready:
-            _t0 = time.perf_counter()
-            _success = False
-            try:
-                pod = self.gateway.wait_for_pod_ready(f"app={sandbox_id},component=sandbox")
-                _success = True
-            finally:
-                sandbox_metrics.record_create(
-                    template_id=template_id,
-                    duration=time.perf_counter() - _t0,
-                    success=_success,
-                    source="direct",
-                )
-        sandbox = self.get_sandbox(sandbox_id)
-        if dispatch_events and pool_state == PoolState.NONE:
-            self._dispatch_running_events(sandbox, template, pod)
-        return sandbox
-
-    def _create_sandbox_crd(
-        self,
-        *,
-        template_id: str,
-        name: str,
-        metadata: dict[str, str] | None,
-        env: list[str] | None,
-        pool_state: str,
-        wait_ready: bool,
-        dispatch_events: bool,
-        ttl_seconds: int | None,
-        workspace: WorkspaceConfigOverride | None,
-    ) -> SandboxResponse:
-        from orchestrator.services.metrics import sandbox_metrics
-
-        assert self.crd is not None
-        metadata = metadata or {}
-        template = self.template_service.get_template(template_id)
-        sandbox_id = short_id()
-        resolved_workspace = self._resolve_workspace(template, workspace)
-        sandbox = self.crd.create(
-            sandbox_id=sandbox_id,
-            template=template,
-            metadata=metadata,
-            name=name,
-            env=env,
-            pool_state=pool_state,
-            ttl_seconds=ttl_seconds,
-            workspace=resolved_workspace,
-        )
-        pod = None
         if wait_ready:
             _t0 = time.perf_counter()
             _success = False
@@ -195,21 +107,42 @@ class SandboxService:
             # The Pod is already serving; a status update that arrives a moment
             # later must not make the create response look unfinished.
             self.crd.wait_until_running(sandbox_id)
+
         sandbox = self.get_sandbox(sandbox_id)
         if dispatch_events and pool_state == PoolState.NONE:
             self._dispatch_running_events(sandbox, template, pod)
         return sandbox
 
+    def build_pool_template(
+        self,
+        template: Template,
+        workspace: WorkspaceConfig,
+    ) -> dict:
+        return self.crd.build_pool_template(template=template, workspace=workspace)
+
+    def claim_pool_sandbox(
+        self,
+        *,
+        pool_name: str,
+        name: str,
+        metadata: dict[str, str],
+        ttl_seconds: int,
+    ) -> SandboxResponse | None:
+        sandbox = self.crd.claim_available(
+            pool_name,
+            name=name,
+            metadata=metadata,
+            ttl_seconds=ttl_seconds,
+        )
+        if sandbox is None:
+            return None
+        return self.get_sandbox(sandbox.id)
+
+    def detach_pool_sandboxes(self, pool_name: str) -> None:
+        self.crd.detach_pool_allocated(pool_name)
+
     def get_sandbox(self, sandbox_id: str) -> SandboxResponse:
-        if self.crd is not None:
-            sandbox = self.crd.get(sandbox_id)
-            try:
-                template = self.template_service.get_template(sandbox.template_id)
-            except Exception:
-                template = None
-            return SandboxResponse.from_sandbox(sandbox, template)
-        deployment = self.gateway.read_deployment(sandbox_id)
-        sandbox = self._deployment_to_sandbox(deployment)
+        sandbox = self.crd.get(sandbox_id)
         try:
             template = self.template_service.get_template(sandbox.template_id)
         except Exception:
@@ -218,13 +151,19 @@ class SandboxService:
 
     def list_sandboxes(self, opts: QueryOptions) -> SandboxListResponse:
         label_selector = self._sandbox_label_selector(opts)
-        if self.crd is not None:
-            return self._sandbox_list_response(self.crd.list(label_selector), opts)
-        deployments = self.gateway.list_deployments(label_selector)
-        return self._sandbox_list_response(
-            [self._deployment_to_sandbox(deployment) for deployment in deployments],
-            opts,
-        )
+        return self._sandbox_list_response(self.crd.list(label_selector), opts)
+
+    def status_counts(self) -> dict[str, int]:
+        counts = {"total": 0, "running": 0, "stopped": 0, "creating": 0}
+        for sandbox in self.crd.list("component=sandbox"):
+            counts["total"] += 1
+            if sandbox.status == SandboxStatus.RUNNING:
+                counts["running"] += 1
+            elif sandbox.status in {SandboxStatus.STOPPED, SandboxStatus.EXITED}:
+                counts["stopped"] += 1
+            elif sandbox.status in {SandboxStatus.CREATED, SandboxStatus.CREATING}:
+                counts["creating"] += 1
+        return counts
 
     @staticmethod
     def _sandbox_label_selector(opts: QueryOptions) -> str:
@@ -285,106 +224,22 @@ class SandboxService:
         )
 
     def update_sandbox(self, sandbox_id: str, req: UpdateSandboxRequest) -> SandboxResponse:
-        if self.crd is not None:
-            cr = self.crd.get_cr(sandbox_id)
-            cr_metadata = cr.get("metadata") or {}
-            labels = dict(cr_metadata.get("labels") or {})
-            annotations = dict(cr_metadata.get("annotations") or {})
-            self._apply_user_updates(req, labels=labels, annotations=annotations)
-            self.crd.patch_metadata(sandbox_id, labels=labels, annotations=annotations)
-            return self.get_sandbox(sandbox_id)
-        deployment = self.gateway.read_deployment(sandbox_id)
-        labels = dict(deployment.metadata.labels or {})
-        annotations = dict(deployment.metadata.annotations or {})
-
-        self._apply_user_updates(
-            req,
-            labels=labels,
-            annotations=annotations,
-        )
-        self._patch_deployment_metadata(
-            sandbox_id,
-            labels=labels,
-            annotations=annotations,
-        )
-        return self.get_sandbox(sandbox_id)
-
-    def update_pool_state(self, sandbox_id: str, pool_state: str) -> None:
-        if self.crd is not None:
-            self.crd.set_pool_state(sandbox_id, pool_state)
-            return
-        deployment = self.gateway.read_deployment(sandbox_id)
-        labels = {**(deployment.metadata.labels or {}), "litterbox.io/pool-state": pool_state}
-        self._patch_deployment_metadata(sandbox_id, labels=labels)
-
-    def mark_pool_allocated(
-        self,
-        sandbox_id: str,
-        *,
-        name: str,
-        metadata: dict[str, str],
-        ttl_seconds: int,
-    ) -> SandboxResponse:
-        if self.crd is not None:
-            cr = self.crd.get_cr(sandbox_id)
-            cr_metadata = cr.get("metadata") or {}
-            labels = dict(cr_metadata.get("labels") or {})
-            annotations = dict(cr_metadata.get("annotations") or {})
-            self._apply_user_updates(
-                UpdateSandboxRequest(name=name, metadata=metadata),
-                labels=labels,
-                annotations=annotations,
-            )
-            labels["litterbox.io/pool-state"] = PoolState.ALLOCATED
-            annotations["litterbox.io/allocated-at"] = utcnow().isoformat()
-            self.crd.mark_allocated(
-                sandbox_id,
-                labels=labels,
-                annotations=annotations,
-                ttl_seconds=ttl_seconds,
-            )
-            return self.get_sandbox(sandbox_id)
-        deployment = self.gateway.read_deployment(sandbox_id)
-        labels = dict(deployment.metadata.labels or {})
-        annotations = dict(deployment.metadata.annotations or {})
-        previous_token = annotations.get("litterbox.io/ttl-token", "")
-        self._apply_user_updates(
-            UpdateSandboxRequest(name=name, metadata=metadata),
-            labels=labels,
-            annotations=annotations,
-        )
-        labels["litterbox.io/pool-state"] = PoolState.ALLOCATED
-        annotations["litterbox.io/allocated-at"] = utcnow().isoformat()
-        self._apply_ttl_annotations(annotations, ttl_seconds)
-        self._patch_deployment_metadata(
-            sandbox_id,
-            labels=labels,
-            annotations=annotations,
-        )
-        self._sync_ttl_schedule(sandbox_id, annotations, previous_token=previous_token)
+        cr = self.crd.get_cr(sandbox_id)
+        cr_metadata = cr.get("metadata") or {}
+        labels = dict(cr_metadata.get("labels") or {})
+        annotations = dict(cr_metadata.get("annotations") or {})
+        self._apply_user_updates(req, labels=labels, annotations=annotations)
+        self.crd.patch_metadata(sandbox_id, labels=labels, annotations=annotations)
         return self.get_sandbox(sandbox_id)
 
     def delete_sandbox(self, sandbox_id: str, deletion_reason: str = "manual") -> None:
-        self._unschedule_current_ttl(sandbox_id)
         sandbox = self.get_sandbox(sandbox_id)
         try:
             template = self.template_service.get_template(sandbox.template_id)
         except Exception:
             template = None
-        grace_period_seconds = self._termination_grace_period_seconds(template)
-        # Delegate expose resource cleanup to ServiceExposeService so that the
-        # naming convention (svc-/ing- prefix) lives in exactly one place.
         if self.expose_service is not None:
             self.expose_service.delete_exposes_for_sandbox(sandbox_id)
-        else:
-            # Fallback: ServiceExposeService not wired yet (e.g. in tests).
-            # Replicate the minimal cleanup inline so delete_sandbox still works.
-            services = self.gateway.list_services(f"litterbox.io/sandbox-id={sandbox_id}")
-            for svc in services:
-                expose_id = (svc.metadata.labels or {}).get("litterbox.io/expose-id")
-                if expose_id:
-                    self.gateway.delete_ingress(f"ing-{expose_id}")
-                self.gateway.delete_service(svc.metadata.name)
         self.webhook_dispatcher.dispatch(
             event=WebhookEvent.SANDBOX_DELETED,
             sandbox=sandbox,
@@ -392,214 +247,48 @@ class SandboxService:
             namespace=self.gateway.namespace,
             deletion_reason=deletion_reason,
         )
-        if self.crd is not None:
-            # Pod and PVC carry an ownerReference to the Sandbox, so the
-            # controller's garbage collection removes them with the CR.
-            self.crd.delete(sandbox_id, grace_period_seconds=grace_period_seconds)
-            return
-        self.gateway.delete_deployment(sandbox_id, grace_period_seconds=grace_period_seconds)
-        workspace = getattr(sandbox, "workspace", None)
-        if workspace.enabled if workspace is not None else self.settings.workspace.enabled:
-            self.gateway.delete_persistent_volume_claim(self._workspace_claim_name(sandbox_id))
+        # Pod and PVC carry an ownerReference to the Sandbox, so Kubernetes
+        # garbage collection removes them with the CR.
+        self.crd.delete(sandbox_id)
 
     def suspend_sandbox(self, sandbox_id: str, *, ttl_expired: bool = False) -> SandboxResponse:
-        if self.crd is not None:
-            self.crd.suspend(sandbox_id, ttl_expired=ttl_expired)
-            self.crd.wait_until_paused(sandbox_id)
-            return self.get_sandbox(sandbox_id)
-        deployment = self.gateway.read_deployment(sandbox_id)
-        annotations = dict(deployment.metadata.annotations or {})
-
-        if ttl_expired:
-            annotations_to_remove = tuple(
-                key
-                for key in (
-                    "litterbox.io/ttl-token",
-                    "litterbox.io/expires-at",
-                    "litterbox.io/last-ttl-renewal",
-                )
-                if key in annotations
-            )
-            ttl_token = annotations.pop("litterbox.io/ttl-token", "")
-            annotations.pop("litterbox.io/expires-at", None)
-            annotations.pop("litterbox.io/last-ttl-renewal", None)
-            annotations["litterbox.io/ttl-suspended-at"] = utcnow().isoformat()
-            self._patch_deployment_metadata(
-                sandbox_id,
-                annotations=annotations,
-                annotations_to_remove=annotations_to_remove,
-            )
-            if ttl_token:
-                self.ttl_queue.unschedule(TTLEntry(sandbox_id=sandbox_id, ttl_token=ttl_token))
-
-        if (deployment.spec.replicas or 0) != 0:
-            self.gateway.scale_deployment(sandbox_id, 0)
+        self.crd.suspend(sandbox_id, ttl_expired=ttl_expired)
+        self.crd.wait_until_paused(sandbox_id)
         return self.get_sandbox(sandbox_id)
 
     def resume_sandbox(self, sandbox_id: str) -> SandboxResponse:
-        if self.crd is not None:
-            cr = self.crd.get_cr(sandbox_id)
-            annotations = (cr.get("metadata") or {}).get("annotations") or {}
-            if annotations.get("litterbox.io/resume-locked") == "true":
-                raise SandboxResumeLockedError(
-                    f"sandbox {sandbox_id} is locked and cannot be resumed"
-                )
-            ttl_seconds = int((cr.get("spec") or {}).get("ttlSeconds") or 0)
-            self.crd.resume(sandbox_id, ttl_seconds=ttl_seconds)
-            self.gateway.wait_for_pod_ready(f"app={sandbox_id},component=sandbox")
-            self.crd.wait_until_running(sandbox_id)
-            return self.get_sandbox(sandbox_id)
-        deployment = self.gateway.read_deployment(sandbox_id)
-        annotations = dict(deployment.metadata.annotations or {})
+        cr = self.crd.get_cr(sandbox_id)
+        annotations = (cr.get("metadata") or {}).get("annotations") or {}
         if annotations.get("litterbox.io/resume-locked") == "true":
-            raise SandboxResumeLockedError(f"sandbox {sandbox_id} is locked and cannot be resumed")
-        if "litterbox.io/ttl-suspended-at" in annotations:
-            annotations_to_remove = ("litterbox.io/ttl-suspended-at",)
-            previous_token = annotations.get("litterbox.io/ttl-token", "")
-            ttl_seconds = int(annotations.get("litterbox.io/ttl-seconds", "0"))
-            if ttl_seconds > 0:
-                self._apply_ttl_annotations(annotations, ttl_seconds)
-            else:
-                annotations.pop("litterbox.io/ttl-suspended-at", None)
-            self._patch_deployment_metadata(
-                sandbox_id,
-                annotations=annotations,
-                annotations_to_remove=annotations_to_remove,
+            raise SandboxResumeLockedError(
+                f"sandbox {sandbox_id} is locked and cannot be resumed"
             )
-            self._sync_ttl_schedule(sandbox_id, annotations, previous_token=previous_token)
-
-        if (deployment.spec.replicas or 0) == 0:
-            self.gateway.scale_deployment(sandbox_id, 1)
-            self.gateway.wait_for_pod_ready(f"app={sandbox_id},component=sandbox")
+        ttl_seconds = int((cr.get("spec") or {}).get("ttlSeconds") or 0)
+        self.crd.resume(sandbox_id, ttl_seconds=ttl_seconds)
+        self.gateway.wait_for_pod_ready(f"app={sandbox_id},component=sandbox")
+        self.crd.wait_until_running(sandbox_id)
         return self.get_sandbox(sandbox_id)
 
     def lock_sandbox(self, sandbox_id: str) -> SandboxResponse:
-        if self.crd is not None:
-            self.crd.lock(sandbox_id)
-            return self.get_sandbox(sandbox_id)
-        deployment = self.gateway.read_deployment(sandbox_id)
-        annotations = dict(deployment.metadata.annotations or {})
-        if annotations.get("litterbox.io/resume-locked") != "true":
-            annotations["litterbox.io/resume-locked"] = "true"
-            annotations["litterbox.io/resume-locked-at"] = utcnow().isoformat()
-            self._patch_deployment_metadata(sandbox_id, annotations=annotations)
+        self.crd.lock(sandbox_id)
         return self.get_sandbox(sandbox_id)
 
     def unlock_sandbox(self, sandbox_id: str) -> SandboxResponse:
-        if self.crd is not None:
-            self.crd.unlock(sandbox_id)
-            return self.get_sandbox(sandbox_id)
-        deployment = self.gateway.read_deployment(sandbox_id)
-        annotations = dict(deployment.metadata.annotations or {})
-        annotations_to_remove = tuple(
-            key
-            for key in (
-                "litterbox.io/resume-locked",
-                "litterbox.io/resume-locked-at",
-            )
-            if annotations.pop(key, None) is not None
-        )
-        if annotations_to_remove:
-            self._patch_deployment_metadata(
-                sandbox_id,
-                annotations=annotations,
-                annotations_to_remove=annotations_to_remove,
-            )
+        self.crd.unlock(sandbox_id)
         return self.get_sandbox(sandbox_id)
 
     def update_ttl(self, sandbox_id: str, ttl_seconds: int) -> None:
-        if self.crd is not None:
-            self.crd.set_ttl(sandbox_id, ttl_seconds)
-            return
-        deployment = self.gateway.read_deployment(sandbox_id)
-        annotations = dict(deployment.metadata.annotations or {})
-        previous_token = annotations.get("litterbox.io/ttl-token", "")
-        self._apply_ttl_annotations(annotations, ttl_seconds)
-        self._patch_deployment_metadata(sandbox_id, annotations=annotations)
-        self._sync_ttl_schedule(sandbox_id, annotations, previous_token=previous_token)
+        self.crd.set_ttl(sandbox_id, ttl_seconds)
 
     def renew_ttl(self, sandbox_id: str, ttl_seconds: int = 0) -> None:
-        if self.crd is not None:
-            cr = self.crd.get_cr(sandbox_id)
-            current_ttl = int((cr.get("spec") or {}).get("ttlSeconds") or 0)
-            if current_ttl == 0:
-                raise ValueError("sandbox does not have TTL enabled")
-            self.crd.set_ttl(sandbox_id, ttl_seconds or current_ttl)
-            return
-        deployment = self.gateway.read_deployment(sandbox_id)
-        annotations = dict(deployment.metadata.annotations or {})
-        current_ttl = int(annotations.get("litterbox.io/ttl-seconds", "0"))
+        cr = self.crd.get_cr(sandbox_id)
+        current_ttl = int((cr.get("spec") or {}).get("ttlSeconds") or 0)
         if current_ttl == 0:
             raise ValueError("sandbox does not have TTL enabled")
-        effective_ttl = ttl_seconds or current_ttl
-        previous_token = annotations.get("litterbox.io/ttl-token", "")
-        self._apply_ttl_annotations(annotations, effective_ttl, include_ttl=False)
-        annotations["litterbox.io/last-ttl-renewal"] = utcnow().isoformat()
-        self._patch_deployment_metadata(sandbox_id, annotations=annotations)
-        self._sync_ttl_schedule(sandbox_id, annotations, previous_token=previous_token)
-
-    def cleanup_expired(self) -> int:
-        if self.crd is not None:
-            # Expiry is part of the controller's reconcile loop; there is no
-            # periodic scan for the API process to run.
-            return 0
-        suspended = 0
-        for deployment in self.gateway.list_deployments("component=sandbox"):
-            annotations = deployment.metadata.annotations or {}
-            expires_at = annotations.get("litterbox.io/expires-at")
-            if not expires_at:
-                continue
-            if datetime.fromisoformat(expires_at) <= utcnow():
-                self.suspend_sandbox(deployment.metadata.name, ttl_expired=True)
-                suspended += 1
-        return suspended
-
-    def delete_if_ttl_due(self, sandbox_id: str, ttl_token: str) -> bool:
-        if self.crd is not None:
-            # The controller owns TTL; drain any legacy queue entry harmlessly.
-            return False
-        try:
-            deployment = self.gateway.read_deployment(sandbox_id)
-        except ApiException as exc:
-            if exc.status == 404:
-                return False
-            raise
-        annotations = deployment.metadata.annotations or {}
-        if annotations.get("litterbox.io/ttl-token", "") != ttl_token:
-            return False
-        expires_at = annotations.get("litterbox.io/expires-at")
-        if not expires_at or datetime.fromisoformat(expires_at) > utcnow():
-            return False
-        self.suspend_sandbox(sandbox_id, ttl_expired=True)
-        return True
-
-    @staticmethod
-    def _workspace_claim_name(sandbox_id: str) -> str:
-        return workspace_claim_name(sandbox_id)
-
-    def _build_workspace_claim(
-        self,
-        sandbox_id: str,
-        workspace: WorkspaceConfig,
-    ) -> client.V1PersistentVolumeClaim:
-        return client.V1PersistentVolumeClaim(
-            metadata=client.V1ObjectMeta(
-                name=self._workspace_claim_name(sandbox_id),
-                namespace=self.gateway.namespace,
-                labels={
-                    "app": "litterbox",
-                    "component": "workspace",
-                    "litterbox.io/sandbox-id": sandbox_id,
-                },
-            ),
-            spec=client.V1PersistentVolumeClaimSpec(
-                access_modes=["ReadWriteOnce"],
-                volume_mode="Filesystem",
-                storage_class_name=workspace.storage_class,
-                resources=client.V1ResourceRequirements(
-                    requests={"storage": workspace.size},
-                ),
-            ),
+        self.crd.renew_ttl(
+            sandbox_id,
+            ttl_seconds=ttl_seconds,
+            current_ttl=current_ttl,
         )
 
     def _resolve_workspace(
@@ -620,296 +309,12 @@ class SandboxService:
                 resolved.update(policy.model_dump(exclude_none=True))
         return WorkspaceConfig.model_validate(resolved)
 
-    def _build_deployment(
-        self,
-        *,
-        sandbox_id: str,
-        template: Template,
-        metadata: dict[str, str],
-        name: str,
-        env: list[str] | None,
-        pool_state: str,
-        ttl_seconds: int | None,
-        workspace: WorkspaceConfig | None = None,
-    ) -> client.V1Deployment:
-        labels = {
-            "app": sandbox_id,
-            "component": "sandbox",
-            "litterbox.io/template-id": template.id,
-            "litterbox.io/sandbox-id": sandbox_id,
-            "litterbox.io/cpu-millicores": str(template.cpu_millicores),
-            "litterbox.io/memory-mb": str(template.memory_mb),
-        }
-        if pool_state != PoolState.NONE:
-            labels["litterbox.io/pool-managed"] = "true"
-            labels["litterbox.io/pool-state"] = pool_state
-
-        annotations = {
-            "litterbox.io/template-id": template.id,
-            "litterbox.io/created-at": utcnow().isoformat(),
-        }
-        workspace = workspace or self._resolve_workspace(template, None)
-        annotations["litterbox.io/workspace-config"] = workspace.model_dump_json()
-        if name:
-            annotations["litterbox.io/allocated-name"] = name
-        for key, value in metadata.items():
-            if is_valid_label_part(key) and is_valid_label_part(value):
-                labels[f"litterbox.io/user-{key}"] = value
-            else:
-                annotations[f"litterbox.io/user-metadata-{key}"] = value
-
-        effective_ttl = ttl_seconds if ttl_seconds is not None else (template.ttl_seconds or 0)
-        if effective_ttl > 0:
-            self._set_ttl_annotations(annotations, effective_ttl, ttl_token=short_id("ttl-"))
-
-        merged_env_items = [*template.env, *(env or [])]
-        merged_env_map: dict[str, str] = {}
-        for key, value in parse_env_list(merged_env_items):
-            merged_env_map[key] = value
-        container_env = [client.V1EnvVar(name=key, value=value) for key, value in merged_env_map.items()]
-        volume_mounts: list[client.V1VolumeMount] = []
-        volumes: list[client.V1Volume] = []
-        container_ports: list[client.V1ContainerPort] = []
-        if workspace.enabled:
-            workspace_mount = client.V1VolumeMount(name="workspace", mount_path=workspace.mount_path)
-            volume_mounts.append(workspace_mount)
-            volumes.append(
-                client.V1Volume(
-                    name="workspace",
-                    persistent_volume_claim=client.V1PersistentVolumeClaimVolumeSource(
-                        claim_name=self._workspace_claim_name(sandbox_id),
-                    ),
-                )
-            )
-        if self.settings.envd.enabled:
-            annotations["litterbox.io/envd-version"] = self.settings.envd.version
-            volumes.append(
-                client.V1Volume(
-                    name="envd",
-                    host_path=client.V1HostPathVolumeSource(
-                        path=self.settings.envd.host_binary_path,
-                        type="File",
-                    ),
-                )
-            )
-            volume_mounts.append(
-                client.V1VolumeMount(
-                    name="envd",
-                    mount_path=self.settings.envd.container_binary_path,
-                    read_only=True,
-                )
-            )
-            container_ports.append(
-                client.V1ContainerPort(name="envd", container_port=self.settings.envd.port)
-            )
-        for index, mount in enumerate(template.host_path_mounts):
-            volume_name = f"host-mount-{index}"
-            volumes.append(
-                client.V1Volume(
-                    name=volume_name,
-                    host_path=client.V1HostPathVolumeSource(
-                        path=mount.host_path,
-                        type="DirectoryOrCreate",
-                    ),
-                )
-            )
-            volume_mounts.append(
-                client.V1VolumeMount(
-                    name=volume_name,
-                    mount_path=mount.container_path,
-                    read_only=mount.read_only,
-                )
-            )
-
-        resources = client.V1ResourceRequirements(
-            limits={
-                "cpu": f"{template.cpu_millicores}m",
-                "memory": f"{template.memory_mb}Mi",
-            },
-            requests={
-                "cpu": f"{template.cpu_request or template.cpu_millicores}m",
-                "memory": f"{template.memory_request or template.memory_mb}Mi",
-            },
-        )
-        lifecycle = self._build_container_lifecycle(template)
-        termination_grace_period_seconds = self._termination_grace_period_seconds(template)
-        pod_spec = client.V1PodSpec(
-            node_selector=(
-                {"litterbox.io/envd-version": self.settings.envd.version}
-                if self.settings.envd.enabled
-                else None
-            ),
-            runtime_class_name=(
-                self.settings.kubernetes.runtime_class
-                if self.settings.kubernetes.runtime_class in self.gateway.available_runtime_classes
-                else None
-            ),
-            image_pull_secrets=(
-                [client.V1LocalObjectReference(name=self.settings.kubernetes.image_pull_secret)]
-                if self.settings.kubernetes.image_pull_secret
-                and self.gateway.secret_exists(self.settings.kubernetes.image_pull_secret)
-                else None
-            ),
-            restart_policy="Always",
-            volumes=volumes or None,
-            termination_grace_period_seconds=termination_grace_period_seconds or None,
-            containers=[
-                client.V1Container(
-                    name="main",
-                    image=template.image,
-                    command=shlex.split(template.command) if template.command else None,
-                    env=container_env or None,
-                    lifecycle=lifecycle,
-                    ports=container_ports or None,
-                    resources=resources,
-                    volume_mounts=volume_mounts or None,
-                    stdin=True,
-                    stdin_once=False,
-                    tty=True,
-                    image_pull_policy="Always",
-                    # AppArmor unconfined, because the default profile silently
-                    # blocks every signal sent inside the sandbox.
-                    #
-                    # What that looked like: a preview would not restart. The
-                    # supervisor stops the previous server with `kill -9`, the
-                    # signal was refused, the old server kept port 3000, and the
-                    # replacement drifted to 3001 while the exposed URL still
-                    # pointed at 3000 — so the reader got 404 from another
-                    # workspace's app.
-                    #
-                    # Measured inside a real sandbox: `signal 0` succeeds while
-                    # signals 1, 2, 9 and 15 all return EACCES — including against a
-                    # child the same shell had just forked, with the same uid, the
-                    # same PID namespace, CAP_KILL present and no seccomp filter.
-                    # Adding CAP_SYS_PTRACE, CAP_SYS_ADMIN or CAP_DAC_READ_SEARCH
-                    # changed nothing; comparing a working `privileged` container
-                    # with a normal one showed the only meaningful difference was
-                    # that privileged carries no AppArmor profile. Unconfined fixed
-                    # it with capabilities untouched, confirmed by A/B: confined
-                    # refuses the signal, unconfined kills the process.
-                    #
-                    # The workload is arbitrary code the sandbox exists to contain,
-                    # one tenant per container; the profile's signal rule protects
-                    # nothing the container boundary does not.
-                    security_context=client.V1SecurityContext(
-                        app_armor_profile=client.V1AppArmorProfile(type="Unconfined"),
-                    ),
-                )
-            ],
-        )
-        return client.V1Deployment(
-            metadata=client.V1ObjectMeta(
-                name=sandbox_id,
-                namespace=self.gateway.namespace,
-                labels=labels,
-                annotations=annotations,
-            ),
-            spec=client.V1DeploymentSpec(
-                replicas=1,
-                selector=client.V1LabelSelector(match_labels={"app": sandbox_id}),
-                template=client.V1PodTemplateSpec(
-                    metadata=client.V1ObjectMeta(labels=labels, annotations=annotations),
-                    spec=pod_spec,
-                ),
-            ),
-        )
-
-    def _build_container_lifecycle(self, template: Template) -> client.V1Lifecycle | None:
-        post_start = None
-        if self.settings.envd.enabled:
-            if template.lifecycle is not None and template.lifecycle.post_start is not None:
-                raise ValueError("template postStart conflicts with envd injection")
-            post_start = client.V1LifecycleHandler(
-                _exec=client.V1ExecAction(
-                    command=[
-                        self.settings.envd.container_binary_path,
-                        "daemon",
-                        "--host",
-                        "0.0.0.0",
-                        "--port",
-                        str(self.settings.envd.port),
-                        "--filesystem-root",
-                        "/",
-                    ]
-                )
-            )
-        elif template.lifecycle is not None and template.lifecycle.post_start is not None:
-            post_start = client.V1LifecycleHandler(
-                _exec=client.V1ExecAction(command=template.lifecycle.post_start.exec.command)
-            )
-
-        pre_stop = None
-        if template.lifecycle is not None and template.lifecycle.pre_stop is not None:
-            pre_stop = client.V1LifecycleHandler(
-                _exec=client.V1ExecAction(command=template.lifecycle.pre_stop.exec.command)
-            )
-
-        if post_start is None and pre_stop is None:
-            return None
-        return client.V1Lifecycle(post_start=post_start, pre_stop=pre_stop)
-
-    @staticmethod
-    def _termination_grace_period_seconds(template: Template | None) -> int:
-        if template is None or template.lifecycle is None or template.lifecycle.pre_stop is None:
-            return 0
-        return template.lifecycle.pre_stop.termination_grace_period_seconds or 0
-
-    def _deployment_to_sandbox(self, deployment: client.V1Deployment) -> Sandbox:
-        labels = deployment.metadata.labels or {}
-        annotations = deployment.metadata.annotations or {}
-        name = annotations.get("litterbox.io/allocated-name", deployment.metadata.name)
-        ttl_seconds = int(annotations.get("litterbox.io/ttl-seconds", "0"))
-        expires_at = None
-        if annotations.get("litterbox.io/expires-at"):
-            expires_at = datetime.fromisoformat(annotations["litterbox.io/expires-at"])
-        allocated_at = None
-        if annotations.get("litterbox.io/allocated-at"):
-            allocated_at = datetime.fromisoformat(annotations["litterbox.io/allocated-at"])
-        updated_at_raw = annotations.get("litterbox.io/updated-at")
-        updated_at = datetime.fromisoformat(updated_at_raw) if updated_at_raw else deployment.metadata.creation_timestamp
-        workspace = None
-        raw_workspace = annotations.get("litterbox.io/workspace-config")
-        if raw_workspace:
-            try:
-                workspace = WorkspaceConfig.model_validate_json(raw_workspace)
-            except ValueError:
-                pass
-        return Sandbox(
-            id=deployment.metadata.name,
-            name=name,
-            template_id=labels.get("litterbox.io/template-id", ""),
-            status=self._deployment_status_to_sandbox_status(deployment),
-            terminating=deployment.metadata.deletion_timestamp is not None,
-            pool_state=labels.get("litterbox.io/pool-state", PoolState.NONE),
-            metadata=self._extract_metadata(labels, annotations),
-            allocated_at=allocated_at,
-            created_at=deployment.metadata.creation_timestamp,
-            updated_at=updated_at,
-            ttl_seconds=ttl_seconds,
-            expires_at=expires_at,
-            locked=annotations.get("litterbox.io/resume-locked") == "true",
-            workspace=workspace,
-        )
-
-    @staticmethod
-    def _extract_metadata(labels: dict[str, str], annotations: dict[str, str]) -> dict[str, str]:
-        metadata: dict[str, str] = {}
-        for key, value in labels.items():
-            if key.startswith("litterbox.io/user-"):
-                metadata[key.removeprefix("litterbox.io/user-")] = value
-        for key, value in annotations.items():
-            if key.startswith("litterbox.io/user-metadata-"):
-                metadata[key.removeprefix("litterbox.io/user-metadata-")] = value
-        return metadata
-
     @staticmethod
     def _apply_user_updates(
         req: UpdateSandboxRequest,
         *,
         labels: dict[str, str],
         annotations: dict[str, str],
-        pod_labels: dict[str, str] | None = None,
-        pod_annotations: dict[str, str] | None = None,
     ) -> None:
         if req.metadata:
             for key, value in req.metadata.items():
@@ -917,126 +322,13 @@ class SandboxService:
                 annotation_key = f"litterbox.io/user-metadata-{key}"
                 if is_valid_label_part(key) and is_valid_label_part(value):
                     labels[label_key] = value
-                    if pod_labels is not None:
-                        pod_labels[label_key] = value
                     annotations.pop(annotation_key, None)
-                    if pod_annotations is not None:
-                        pod_annotations.pop(annotation_key, None)
                 else:
                     annotations[annotation_key] = value
-                    if pod_annotations is not None:
-                        pod_annotations[annotation_key] = value
                     labels.pop(label_key, None)
-                    if pod_labels is not None:
-                        pod_labels.pop(label_key, None)
 
         if req.name:
             annotations["litterbox.io/allocated-name"] = req.name
-            if pod_annotations is not None:
-                pod_annotations["litterbox.io/allocated-name"] = req.name
-
-    def _patch_deployment_metadata(
-        self,
-        sandbox_id: str,
-        *,
-        labels: dict[str, str] | None = None,
-        annotations: dict[str, str] | None = None,
-        annotations_to_remove: tuple[str, ...] = (),
-        pod_labels: dict[str, str] | None = None,
-        pod_annotations: dict[str, str] | None = None,
-    ) -> None:
-        body: dict[str, object] = {}
-        if labels is not None or annotations is not None:
-            metadata: dict[str, object] = {}
-            if labels is not None:
-                metadata["labels"] = labels
-            if annotations is not None:
-                # Stamp the real modification time whenever annotations are updated.
-                annotations["litterbox.io/updated-at"] = utcnow().isoformat()
-                annotation_patch: dict[str, str | None] = dict(annotations)
-                # Merge patches retain omitted map entries. Explicit null values
-                # are required to remove annotations from the live object.
-                for key in annotations_to_remove:
-                    annotation_patch[key] = None
-                metadata["annotations"] = annotation_patch
-            body["metadata"] = metadata
-        if pod_labels is not None or pod_annotations is not None:
-            template_metadata: dict[str, object] = {}
-            if pod_labels is not None:
-                template_metadata["labels"] = pod_labels
-            if pod_annotations is not None:
-                template_metadata["annotations"] = pod_annotations
-            body["spec"] = {"template": {"metadata": template_metadata}}
-        if body:
-            self.gateway.patch_deployment(sandbox_id, body)
-
-    def _apply_ttl_annotations(
-        self,
-        annotations: dict[str, str],
-        ttl_seconds: int,
-        *,
-        include_ttl: bool = True,
-    ) -> None:
-        if ttl_seconds <= 0:
-            self._clear_ttl_annotations(annotations)
-            return
-        ttl_token = short_id("ttl-")
-        self._set_ttl_annotations(annotations, ttl_seconds, ttl_token=ttl_token, include_ttl=include_ttl)
-
-    @staticmethod
-    def _set_ttl_annotations(
-        annotations: dict[str, str],
-        ttl_seconds: int,
-        *,
-        ttl_token: str,
-        include_ttl: bool = True,
-    ) -> None:
-        annotations.pop("litterbox.io/ttl-suspended-at", None)
-        if include_ttl:
-            annotations["litterbox.io/ttl-seconds"] = str(ttl_seconds)
-        annotations["litterbox.io/expires-at"] = datetime.fromtimestamp(utcnow().timestamp() + ttl_seconds, tz=UTC).isoformat()
-        annotations["litterbox.io/ttl-token"] = ttl_token
-
-    @staticmethod
-    def _clear_ttl_annotations(annotations: dict[str, str]) -> None:
-        for key in (
-            "litterbox.io/ttl-seconds",
-            "litterbox.io/expires-at",
-            "litterbox.io/ttl-token",
-            "litterbox.io/last-ttl-renewal",
-            "litterbox.io/ttl-suspended-at",
-        ):
-            annotations.pop(key, None)
-
-    def _sync_ttl_schedule(
-        self,
-        sandbox_id: str,
-        annotations: dict[str, str],
-        *,
-        previous_token: str = "",
-    ) -> None:
-        if self.crd is not None:
-            return
-        current_token = annotations.get("litterbox.io/ttl-token", "")
-        if previous_token and previous_token != current_token:
-            self.ttl_queue.unschedule(TTLEntry(sandbox_id=sandbox_id, ttl_token=previous_token))
-        expires_at = annotations.get("litterbox.io/expires-at")
-        if current_token and expires_at:
-            self.ttl_queue.schedule(
-                TTLEntry(sandbox_id=sandbox_id, ttl_token=current_token),
-                datetime.fromisoformat(expires_at),
-            )
-
-    def _unschedule_current_ttl(self, sandbox_id: str) -> None:
-        if self.crd is not None:
-            return
-        try:
-            deployment = self.gateway.read_deployment(sandbox_id)
-        except Exception:  # noqa: BLE001
-            return
-        token = (deployment.metadata.annotations or {}).get("litterbox.io/ttl-token", "")
-        if token:
-            self.ttl_queue.unschedule(TTLEntry(sandbox_id=sandbox_id, ttl_token=token))
 
     def _dispatch_running_events(self, sandbox: SandboxResponse, template: Template, pod) -> None:
         payload = {
@@ -1059,19 +351,3 @@ class SandboxService:
         except Exception:  # noqa: BLE001
             pod = None
         self._dispatch_running_events(sandbox, template, pod)
-
-    @staticmethod
-    def _deployment_status_to_sandbox_status(deployment: client.V1Deployment) -> SandboxStatus:
-        replicas = deployment.spec.replicas or 0
-        status = deployment.status
-        if deployment.metadata.deletion_timestamp is not None:
-            return SandboxStatus.STOPPED
-        if replicas == 0:
-            return SandboxStatus.STOPPED
-        if (status.ready_replicas or 0) > 0 and (status.available_replicas or 0) > 0:
-            return SandboxStatus.RUNNING
-        if (status.unavailable_replicas or 0) > 0 or (status.replicas or 0) == 0:
-            return SandboxStatus.CREATED
-        if (status.replicas or 0) > 0 and (status.ready_replicas or 0) == 0:
-            return SandboxStatus.CREATED
-        return SandboxStatus.UNKNOWN

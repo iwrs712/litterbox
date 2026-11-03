@@ -4,6 +4,8 @@ from datetime import datetime, timedelta
 import shlex
 from typing import Any
 
+from kubernetes.client import ApiException
+
 from orchestrator.config import Settings
 from orchestrator.domain.models import (
     PoolState,
@@ -65,6 +67,96 @@ class SandboxCRDService:
         )
         return self.to_sandbox(self.crd.create(body))
 
+    def claim_available(
+        self,
+        pool_name: str,
+        *,
+        name: str,
+        metadata: dict[str, str],
+        ttl_seconds: int,
+    ) -> Sandbox | None:
+        """Atomically move one available pool sandbox to allocated.
+
+        The JSON Patch ``test`` on ``resourceVersion`` is the optimistic lock:
+        a concurrent claim or controller cleanup makes the patch fail with 409
+        and the next candidate is tried.
+        """
+        selector = (
+            f"litterbox.io/pool={pool_name},"
+            "litterbox.io/pool-state=available,"
+            "component=sandbox"
+        )
+        for cr in self.crd.list(selector):
+            cr_metadata = cr.get("metadata") or {}
+            resource_version = cr_metadata.get("resourceVersion")
+            if not resource_version:
+                continue
+            labels = dict(cr_metadata.get("labels") or {})
+            annotations = dict(cr_metadata.get("annotations") or {})
+            labels["litterbox.io/pool-state"] = "allocated"
+            annotations["litterbox.io/allocated-at"] = utcnow().isoformat()
+            if name:
+                annotations["litterbox.io/allocated-name"] = name
+            for key, value in metadata.items():
+                label_key = f"litterbox.io/user-{key}"
+                annotation_key = f"litterbox.io/user-metadata-{key}"
+                if is_valid_label_part(key) and is_valid_label_part(value):
+                    labels[label_key] = value
+                    annotations.pop(annotation_key, None)
+                else:
+                    annotations[annotation_key] = value
+                    labels.pop(label_key, None)
+
+            operations: list[dict[str, Any]] = [
+                {"op": "test", "path": "/metadata/resourceVersion", "value": resource_version},
+                {"op": "add", "path": "/metadata/labels", "value": labels},
+                {"op": "add", "path": "/metadata/annotations", "value": annotations},
+                # Detach from the pool so deleting the pool never deletes a
+                # sandbox that is already in use.
+                {"op": "add", "path": "/metadata/ownerReferences", "value": []},
+                {"op": "add", "path": "/spec/state", "value": "Running"},
+                {"op": "add", "path": "/spec/ttlSeconds", "value": ttl_seconds},
+            ]
+            if ttl_seconds > 0:
+                operations.append(
+                    {"op": "add", "path": "/spec/ttlAnchor", "value": utcnow().isoformat()}
+                )
+            elif "ttlAnchor" in (cr.get("spec") or {}):
+                operations.append({"op": "remove", "path": "/spec/ttlAnchor"})
+            try:
+                patched = self.crd.patch_json(cr_metadata["name"], operations)
+            except ApiException as exc:
+                if exc.status == 409:
+                    continue
+                raise
+            return self.to_sandbox(patched)
+        return None
+
+    def detach_pool_allocated(self, pool_name: str) -> None:
+        """Remove the pool ownerReference from allocated sandboxes."""
+        selector = f"litterbox.io/pool={pool_name},litterbox.io/pool-state=allocated"
+        for cr in self.crd.list(selector):
+            cr_metadata = cr.get("metadata") or {}
+            refs = cr_metadata.get("ownerReferences") or []
+            if not any(
+                ref.get("kind") == "SandboxPool" and ref.get("name") == pool_name
+                for ref in refs
+            ):
+                continue
+            remaining = [
+                ref
+                for ref in refs
+                if not (ref.get("kind") == "SandboxPool" and ref.get("name") == pool_name)
+            ]
+            try:
+                self.crd.patch(
+                    cr_metadata["name"],
+                    {"metadata": {"ownerReferences": remaining}},
+                )
+            except ApiException as exc:
+                if exc.status != 404:
+                    raise
+
     def build_object(
         self,
         *,
@@ -94,6 +186,8 @@ class SandboxCRDService:
             "litterbox.io/created-at": utcnow().isoformat(),
             "litterbox.io/workspace-config": workspace.model_dump_json(),
         }
+        if self.settings.envd.enabled:
+            annotations["litterbox.io/envd-version"] = self.settings.envd.version
         if name:
             annotations["litterbox.io/allocated-name"] = name
         for key, value in metadata.items():
@@ -102,6 +196,53 @@ class SandboxCRDService:
             else:
                 annotations[f"litterbox.io/user-metadata-{key}"] = value
 
+        return {
+            "apiVersion": f"{self.crd.group}/{self.crd.version}",
+            "kind": "Sandbox",
+            "metadata": {
+                "name": sandbox_id,
+                "namespace": self.crd.namespace,
+                "labels": labels,
+                "annotations": annotations,
+            },
+            "spec": self.build_spec(
+                sandbox_id=sandbox_id,
+                template=template,
+                env=env,
+                ttl_seconds=ttl_seconds,
+                workspace=workspace,
+            ),
+        }
+
+    def build_pool_template(
+        self,
+        *,
+        template: Template,
+        workspace: WorkspaceConfig,
+    ) -> dict[str, Any]:
+        """Compile a Sandbox spec that the pool controller clones per sandbox."""
+        spec = self.build_spec(
+            sandbox_id="pool",
+            template=template,
+            env=None,
+            ttl_seconds=0,
+            workspace=workspace,
+        )
+        spec["workspace"]["claimName"] = ""
+        spec["ttlSeconds"] = 0
+        spec.pop("ttlAnchor", None)
+        spec["state"] = "Running"
+        return spec
+
+    def build_spec(
+        self,
+        *,
+        sandbox_id: str,
+        template: Template,
+        env: list[str] | None,
+        ttl_seconds: int | None,
+        workspace: WorkspaceConfig,
+    ) -> dict[str, Any]:
         effective_ttl = ttl_seconds if ttl_seconds is not None else (template.ttl_seconds or 0)
         if effective_ttl < 0:
             effective_ttl = 0
@@ -131,7 +272,6 @@ class SandboxCRDService:
 
         envd_enabled = self.settings.envd.enabled
         if envd_enabled:
-            annotations["litterbox.io/envd-version"] = self.settings.envd.version
             volumes.append(
                 {
                     "name": "envd",
@@ -261,18 +401,7 @@ class SandboxCRDService:
         }
         if effective_ttl > 0:
             spec["ttlAnchor"] = utcnow().isoformat()
-
-        return {
-            "apiVersion": f"{self.crd.group}/{self.crd.version}",
-            "kind": "Sandbox",
-            "metadata": {
-                "name": sandbox_id,
-                "namespace": self.crd.namespace,
-                "labels": labels,
-                "annotations": annotations,
-            },
-            "spec": spec,
-        }
+        return spec
 
     def patch_metadata(
         self,
@@ -294,26 +423,6 @@ class SandboxCRDService:
         if metadata:
             self.crd.patch(sandbox_id, {"metadata": metadata})
 
-    def mark_allocated(
-        self,
-        sandbox_id: str,
-        *,
-        labels: dict[str, str],
-        annotations: dict[str, str],
-        ttl_seconds: int,
-    ) -> None:
-        annotations["litterbox.io/updated-at"] = utcnow().isoformat()
-        self.crd.patch(
-            sandbox_id,
-            {
-                "metadata": {"labels": labels, "annotations": annotations},
-                "spec": {
-                    "ttlSeconds": ttl_seconds,
-                    "ttlAnchor": utcnow().isoformat() if ttl_seconds > 0 else None,
-                },
-            },
-        )
-
     def set_ttl(self, sandbox_id: str, ttl_seconds: int) -> None:
         self.crd.patch(
             sandbox_id,
@@ -326,12 +435,16 @@ class SandboxCRDService:
             },
         )
 
-    def renew_ttl(self, sandbox_id: str) -> None:
+    def renew_ttl(self, sandbox_id: str, *, ttl_seconds: int, current_ttl: int) -> None:
+        # The configured TTL stays unchanged; only the next expiry moves. Keep
+        # the anchor consistent with ``expiresAt = anchor + current_ttl``.
+        effective_ttl = ttl_seconds or current_ttl
+        anchor = utcnow() + timedelta(seconds=effective_ttl - current_ttl)
         self.crd.patch(
             sandbox_id,
             {
                 "metadata": {"annotations": {"litterbox.io/updated-at": utcnow().isoformat()}},
-                "spec": {"ttlAnchor": utcnow().isoformat()},
+                "spec": {"ttlAnchor": anchor.isoformat()},
             },
         )
 
@@ -357,17 +470,6 @@ class SandboxCRDService:
                     }
                 },
                 "spec": spec,
-            },
-        )
-
-    def set_pool_state(self, sandbox_id: str, pool_state: str) -> None:
-        self.crd.patch(
-            sandbox_id,
-            {
-                "metadata": {
-                    "labels": {"litterbox.io/pool-state": pool_state},
-                    "annotations": {"litterbox.io/updated-at": utcnow().isoformat()},
-                }
             },
         )
 
@@ -400,8 +502,8 @@ class SandboxCRDService:
             },
         )
 
-    def delete(self, sandbox_id: str, *, grace_period_seconds: int = 0) -> None:
-        self.crd.delete(sandbox_id, grace_period_seconds=grace_period_seconds)
+    def delete(self, sandbox_id: str) -> None:
+        self.crd.delete(sandbox_id)
 
     # ------------------------------------------------------------------
     # Reads

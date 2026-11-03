@@ -48,18 +48,22 @@ uvicorn orchestrator.main:app --reload --port 8080
 # Interactive docs: http://localhost:8080/docs
 ```
 
-**Celery worker** (pool reconcile + webhook delivery):
+**Celery worker** (webhook delivery):
 ```bash
 celery -A orchestrator.celery_app:celery_app worker \
   -l info \
-  -Q pool_reconcile,webhook_delivery \
+  -Q webhook_delivery \
   -n worker@%h
 ```
 
-**TTL reaper:**
+**Sandbox controller** (Go, required for every sandbox and pool):
 ```bash
-python -m orchestrator.worker_runner ttl
+cd ../controller
+go run ./cmd/controller --leader-elect=false --kubeconfig ~/.kube/config
 ```
+In a cluster, apply `controller/config/crd.yaml`,
+`controller/config/sandboxpool-crd.yaml`, `controller/config/rbac.yaml` and
+`controller/config/controller.yaml` instead.
 
 > **Tip:** Use [tmux](https://github.com/tmux/tmux/wiki) or [overmind](https://github.com/DarthSim/overmind) to manage multiple terminals conveniently.
 
@@ -89,9 +93,10 @@ orchestrator/src/orchestrator/
 │   ├── models.py          # Pydantic v2 models (Template, Sandbox, Pool, Webhook…)
 │   └── e2b_models.py      # E2B-compatible request/response models
 ├── infra/
-│   ├── kubernetes.py      # KubernetesGateway — every K8s API call lives here
-│   ├── repositories.py    # ConfigMap-backed repos (TemplateRepo, PoolRepo, WebhookRepo)
-│   └── ttl_queue.py       # Redis sorted-set TTL queue operations
+│   ├── kubernetes.py      # KubernetesGateway — Pods, Services, Ingresses, ConfigMaps
+│   ├── sandbox_crd.py     # Dynamic client for Sandbox custom resources
+│   ├── sandbox_pool_crd.py# SandboxPool repository
+│   └── repositories.py    # ConfigMap-backed repos (TemplateRepo, WebhookRepo)
 ├── routes/                # HTTP transports
 │   ├── templates.py
 │   ├── sandboxes.py
@@ -102,23 +107,22 @@ orchestrator/src/orchestrator/
 │   ├── envd.py            # envd path proxy + E2B wildcard host routing
 │   └── e2b.py             # E2B control plane
 ├── services/
-│   ├── sandboxes.py       # Sandbox lifecycle business logic
+│   ├── sandboxes.py       # Sandbox CR lifecycle business logic
+│   ├── sandbox_crd.py     # CR spec compilation + status projection
 │   ├── pools.py           # Pool management + reconcile loop
 │   ├── templates.py       # Template CRUD
 │   ├── webhooks.py        # Webhook delivery
 │   ├── envd_proxy.py      # Authenticated proxy to the sandbox envd process
 │   ├── e2b.py             # E2B control-plane adapter
 │   ├── exposes.py         # Service/Ingress expose management
-│   ├── metrics.py         # Prometheus + in-memory snapshot
-│   └── ttl.py             # TTL service layer
+│   └── metrics.py         # Prometheus + in-memory snapshot
 ├── container.py           # Dependency injection — wires all services together
 ├── main.py                # FastAPI app, middleware and router wiring
 ├── tasks.py               # Celery task definitions
 ├── celery_app.py          # Celery app instance
 ├── config.py              # Settings model (TOML + env vars)
 ├── auth.py                # Bearer and E2B API-key checks
-├── utils.py               # Shared utilities (short_id, label sanitization…)
-└── worker_runner.py       # Entry point for non-Celery workers (TTL scanner)
+└── utils.py               # Shared utilities (short_id, label sanitization…)
 ```
 
 ---

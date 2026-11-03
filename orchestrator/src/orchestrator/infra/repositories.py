@@ -3,9 +3,8 @@ from __future__ import annotations
 import re
 from typing import Generic, TypeVar
 
-from kubernetes.client import ApiException
 
-from orchestrator.domain.models import Pool, Template, Webhook
+from orchestrator.domain.models import Template, Webhook
 from orchestrator.infra.kubernetes import KubernetesGateway
 
 ModelT = TypeVar("ModelT")
@@ -91,45 +90,6 @@ class TemplateRepository(_ConfigMapRepository[Template]):
             except Exception:
                 continue
         return templates
-
-    def delete(self, template_id: str) -> None:
-        self._delete_payload(template_id)
-
-
-class PoolRepository(_ConfigMapRepository[Pool]):
-    prefix = "pool"
-    payload_key = "pool.json"
-    base_selector = "app=litterbox,component=pool"
-
-    def save(self, pool: Pool) -> Pool:
-        self._save_payload(
-            pool.template_id,
-            pool.model_dump(mode="json"),
-            {
-                "app": "litterbox",
-                "component": "pool",
-                "litterbox.io/template-id": pool.template_id,
-            },
-        )
-        return pool
-
-    def get(self, template_id: str) -> Pool | None:
-        try:
-            _, payload = self._get_payload(template_id)
-        except ApiException as exc:
-            if exc.status == 404:
-                return None
-            raise
-        return Pool.model_validate(payload)
-
-    def list(self) -> list[Pool]:
-        pools: list[Pool] = []
-        for _, payload in self._list_payloads():
-            try:
-                pools.append(Pool.model_validate(payload))
-            except Exception:
-                continue
-        return pools
 
     def delete(self, template_id: str) -> None:
         self._delete_payload(template_id)

@@ -55,51 +55,11 @@ def start_celery_process(root: Path, name: str, *args: str) -> tuple[subprocess.
     return process, log_path
 
 
-def start_python_process(root: Path, name: str, *args: str) -> tuple[subprocess.Popen[str], Path]:
-    log_dir = root / ".pytest-celery"
-    log_dir.mkdir(exist_ok=True)
-    log_path = log_dir / f"{name}.log"
-    log_file = log_path.open("w")
-    process = subprocess.Popen(
-        [sys.executable, *args],
-        cwd=root,
-        env={**os.environ, "PYTHONUNBUFFERED": "1"},
-        stdout=log_file,
-        stderr=subprocess.STDOUT,
-        text=True,
-    )
-    process.log_file = log_file
-    return process, log_path
-
-
 @pytest.fixture(scope="module", autouse=True)
 def celery_runtime():
     root = Path(__file__).resolve().parents[2]
-    broker_queue = "orchestrator:ttl"
-    subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            (
-                "from redis import Redis; "
-                "Redis(host='127.0.0.1', port=3379, password='difyai123456', db=2)"
-                f".delete('{broker_queue}')"
-            ),
-        ],
-        cwd=root,
-        check=True,
-    )
     processes: list[subprocess.Popen[str]] = []
     try:
-        ttl_worker, ttl_log = start_python_process(
-            root,
-            "ttl-worker",
-            "-m",
-            "orchestrator.worker_runner",
-            "ttl",
-        )
-        processes.append(ttl_worker)
-        wait_for_process_ready(ttl_log)
         webhook_worker, webhook_log = start_celery_process(
             root,
             "webhook-worker",
@@ -115,21 +75,6 @@ def celery_runtime():
         )
         processes.append(webhook_worker)
         wait_for_process_ready(webhook_log)
-        pool_worker, pool_log = start_celery_process(
-            root,
-            "pool-worker",
-            "worker",
-            "-P",
-            "solo",
-            "-l",
-            "info",
-            "-Q",
-            queue_for_worker("pool"),
-            "-n",
-            "pool-test@%h",
-        )
-        processes.append(pool_worker)
-        wait_for_process_ready(pool_log)
         time.sleep(2)
         yield
     finally:

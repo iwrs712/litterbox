@@ -5,7 +5,6 @@ import json
 import os
 from pathlib import Path
 import tomllib
-from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -28,10 +27,6 @@ class KubernetesConfig(BaseModel):
 class SandboxConfig(BaseModel):
     max_sandboxes: int = 1000
     base_domain: str = "example.com"
-    # "deployment" keeps the legacy command-style lifecycle where the API
-    # creates Deployments directly. "crd" writes a Sandbox custom resource and
-    # lets the sandbox-controller converge Pods, PVCs and status.
-    backend: Literal["deployment", "crd"] = "deployment"
     crd_group: str = "litterbox.io"
     crd_version: str = "v1alpha1"
     crd_plural: str = "sandboxes"
@@ -85,10 +80,6 @@ class E2BConfig(BaseModel):
 
 class TTLConfig(BaseModel):
     default_ttl_seconds: int = 1800
-    min_ttl_seconds: int = 60
-    max_ttl_seconds: int = 86400
-    queue_key: str = "orchestrator:ttl"
-    worker_poll_interval_seconds: float = 1.0
 
 
 class WebhookConfig(BaseModel):

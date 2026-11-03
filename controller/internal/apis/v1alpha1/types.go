@@ -13,6 +13,7 @@ const (
 	GroupName = "litterbox.io"
 	Version   = "v1alpha1"
 	Kind      = "Sandbox"
+	KindPool  = "SandboxPool"
 
 	StateRunning = "Running"
 	StatePaused  = "Paused"
@@ -108,8 +109,27 @@ type Sandbox struct {
 	Status SandboxStatus `json:"status,omitempty"`
 }
 
-type SandboxList struct {
-	metav1.TypeMeta `json:",inline"`
-	metav1.ListMeta `json:"metadata,omitempty"`
-	Items           []Sandbox `json:"items"`
+type SandboxPoolSpec struct {
+	TemplateID      string      `json:"templateID"`
+	SandboxTemplate SandboxSpec `json:"sandboxTemplate"`
+	TargetReady     int32       `json:"targetReady"`
+	MinReady        int32       `json:"minReady,omitempty"`
+	MaxCreating     int32       `json:"maxCreating,omitempty"`
+}
+
+type SandboxPoolStatus struct {
+	Ready              int32 `json:"ready"`
+	Creating           int32 `json:"creating"`
+	Allocated          int32 `json:"allocated"`
+	Failed             int32 `json:"failed"`
+	Terminating        int32 `json:"terminating"`
+	ObservedGeneration int64 `json:"observedGeneration"`
+}
+
+type SandboxPool struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+
+	Spec   SandboxPoolSpec   `json:"spec,omitempty"`
+	Status SandboxPoolStatus `json:"status,omitempty"`
 }

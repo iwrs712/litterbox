@@ -199,6 +199,26 @@ func TestComputeStatusPendingAndPaused(t *testing.T) {
 	}
 }
 
+func TestTTLExpiryTruncatesToSeconds(t *testing.T) {
+	anchor := metav1.NewTime(time.Date(2026, 11, 4, 10, 0, 0, 123456789, time.UTC))
+
+	expiry := ttlExpiry(&anchor, 60)
+
+	if expiry == nil {
+		t.Fatal("expected an expiry")
+	}
+	if expiry.Nanosecond() != 0 {
+		t.Fatalf("expiry must be second precision, got %s", expiry.Time)
+	}
+	want := anchor.Add(time.Minute).Truncate(time.Second)
+	if !expiry.Time.Equal(want) {
+		t.Fatalf("unexpected expiry:\n got %s\nwant %s", expiry.Time, want)
+	}
+	if ttlExpiry(&anchor, 0) != nil {
+		t.Fatal("zero TTL must not expire")
+	}
+}
+
 func TestComputeStatusFailedPod(t *testing.T) {
 	sandbox := testSandbox()
 	pod := &corev1.Pod{Status: corev1.PodStatus{Phase: corev1.PodFailed}}

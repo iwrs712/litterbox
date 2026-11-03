@@ -53,8 +53,3 @@ class E2BSandboxDetail(BaseModel):
     traffic_access_token: str | None = Field(default=None, alias="trafficAccessToken")
     started_at: Any | None = Field(default=None, alias="startedAt")
     end_at: Any | None = Field(default=None, alias="endAt")
-
-
-class E2BError(BaseModel):
-    code: str
-    message: str

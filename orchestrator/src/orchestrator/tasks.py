@@ -70,13 +70,3 @@ def deliver_webhook_event(self, webhook_id: str, payload_data: dict) -> None:
             exc,
             exc_info=True,
         )
-
-
-@celery_app.task(name="orchestrator.tasks.reconcile_pool", bind=True, max_retries=2, default_retry_delay=5)
-def reconcile_pool(self, template_id: str) -> None:
-    container = get_worker_container()
-    try:
-        container.pool_service.reconcile_pool(template_id)
-    except Exception as exc:
-        self.retry(exc=exc)
-

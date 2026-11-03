@@ -67,21 +67,34 @@ class SandboxCRDGateway:
             body,
         )
 
-    def update_status(self, name: str, status: dict[str, Any]) -> dict[str, Any]:
-        return self.api.patch_namespaced_custom_object_status(
-            self.group,
-            self.version,
-            self.namespace,
-            self.plural,
-            name,
-            {"status": status},
+    def patch_json(self, name: str, operations: list[dict[str, Any]]) -> dict[str, Any]:
+        # Newer generated clients hard-code merge-patch for this endpoint, so
+        # call the client directly to send a real JSON Patch.
+        return self.api.api_client.call_api(
+            f"/apis/{self.group}/{self.version}/namespaces/{self.namespace}"
+            f"/{self.plural}/{name}",
+            "PATCH",
+            {
+                "group": self.group,
+                "version": self.version,
+                "namespace": self.namespace,
+                "plural": self.plural,
+                "name": name,
+            },
+            [],
+            {
+                "Accept": "application/json",
+                "Content-Type": "application/json-patch+json",
+            },
+            body=operations,
+            auth_settings=["BearerToken"],
+            response_type="object",
+            _return_http_data_only=True,
+            _preload_content=True,
         )
 
-    def delete(self, name: str, grace_period_seconds: int = 0) -> None:
-        body = client.V1DeleteOptions(
-            grace_period_seconds=grace_period_seconds,
-            propagation_policy="Foreground",
-        )
+    def delete(self, name: str) -> None:
+        body = client.V1DeleteOptions(propagation_policy="Foreground")
         try:
             self.api.delete_namespaced_custom_object(
                 self.group,
@@ -94,15 +107,6 @@ class SandboxCRDGateway:
         except ApiException as exc:
             if exc.status != 404:
                 raise
-
-    def exists(self, name: str) -> bool:
-        try:
-            self.get(name)
-        except ApiException as exc:
-            if exc.status == 404:
-                return False
-            raise
-        return True
 
     def wait_until_phase(
         self,

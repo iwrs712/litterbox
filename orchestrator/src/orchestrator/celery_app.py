@@ -15,13 +15,11 @@ celery_app = Celery(
 )
 
 webhook_queue = queue_for_worker("webhook")
-pool_queue = queue_for_worker("pool")
 
 celery_app.conf.update(
     task_default_queue="default",
     task_routes={
         "orchestrator.tasks.deliver_webhook_event": {"queue": webhook_queue},
-        "orchestrator.tasks.reconcile_pool": {"queue": pool_queue},
     },
     timezone="UTC",
     enable_utc=True,

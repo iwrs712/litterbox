@@ -1,38 +1,37 @@
 # Litterbox sandbox controller
 
 A Kubernetes controller that turns a `Sandbox` custom resource into a Pod and a
-workspace PVC. It is the alternative to the legacy Deployment path in the
-Python orchestrator.
+workspace PVC, and maintains warm `SandboxPool` supply. It is the sandbox
+lifecycle implementation used by the Python orchestrator.
 
 ```text
 orchestrator (API)                 controller                        Kubernetes
      │                                  │                                 │
      │ create/patch Sandbox CR ────────►│                                 │
+     │ create/patch SandboxPool CR ────►│                                 │
      │                                  │ create/delete Pod + PVC ───────►│
      │◄────── read status.phase ────────│◄──── watch Pod/PVC events ──────│
 ```
 
 The orchestrator never talks to Pods for lifecycle decisions. It writes
 desired state (`spec.state`, `spec.ttlSeconds`, `spec.ttlAnchor`) and reads
-`status.phase` / `status.podIP`.
+`status.phase` / `status.podIP`. Pool allocation is an optimistic JSON Patch
+claim against an `available` Sandbox, not a Redis lock.
 
 ## Why a controller
 
-The legacy path executes a chain of API calls in the request handler: create
-PVC, create Deployment, poll Pod readiness, patch annotations, write Redis TTL
-entries. Every step can fail independently, and a crash leaves orphaned PVCs
-or sandboxes stuck in `CREATING`.
+A request handler that creates a PVC and a workload, then polls readiness, can
+fail halfway through and leave orphaned objects or a sandbox stuck in
+`CREATING`. This controller is level-triggered instead:
 
-This controller is level-triggered instead:
-
-| Concern | Legacy API path | Controller |
+| Concern | Imperative handler | Controller |
 |---|---|---|
-| Create | synchronous PVC + Deployment + 100 ms readiness polling | one CR write; the controller converges asynchronously |
-| Reads | `list Deployments` on every request / dashboard refresh | informer cache, no API server read |
-| TTL expiry | Redis sorted set + single-threaded worker | reconcile compares `ttlAnchor + ttlSeconds` with now |
+| Create | synchronous PVC + workload + readiness polling | one CR write; the controller converges asynchronously |
+| Reads | list workloads on every request / dashboard refresh | informer cache, no API server read |
+| TTL expiry | external queue + single-threaded worker | reconcile compares `ttlAnchor + ttlSeconds` with now |
 | Crash recovery | no background repair | next reconcile repairs missing Pod/PVC |
 | Cleanup | manual delete order | `ownerReference` garbage collection |
-| Pod identity | Deployment + ReplicaSet + Pod | Pod only |
+| Pod identity | workload + controller objects | Pod only |
 
 ## Reconciliation
 
@@ -45,13 +44,66 @@ For every `Sandbox` the controller ensures:
 5. A suspended or expired sandbox has no Pod, but keeps its PVC.
 6. Deleting the Sandbox deletes the Pod and PVC through `ownerReference`.
 
+For every `SandboxPool` the controller ensures:
+
+1. `available + creating` tracks `spec.targetReady`, capped by `spec.maxCreating`.
+2. It creates Sandbox CRs with `pool-state=creating` and owns them through
+   `ownerReference`.
+3. A `creating` Sandbox becomes `available` once its `status.phase` is `Running`.
+4. Excess `available` and all `failed` Sandboxes are deleted with a
+   `resourceVersion` precondition, so a concurrent claim always wins.
+5. An `allocated` Sandbox is detached from the pool. Deleting the pool never
+   deletes a sandbox that a user is already using.
+6. Pool status publishes `ready`, `creating`, `allocated`, `failed` and
+   `terminating` counts.
+
+The API claims an available sandbox with a JSON Patch that tests
+`metadata.resourceVersion`; a lost race simply tries the next candidate.
+There is no Redis pool lock and no Celery pool task.
+
 A Pod that disappears (eviction, node loss, or `kubectl delete pod`) is
 recreated on the next reconcile. Deleting the Sandbox never deletes the
 workspace explicitly; garbage collection does it once the CR is gone.
 
-## CRD
+## CRDs
 
-See [config/crd.yaml](config/crd.yaml) for the full schema. A minimal object:
+See [config/crd.yaml](config/crd.yaml) for the full Sandbox schema and
+[config/sandboxpool-crd.yaml](config/sandboxpool-crd.yaml) for SandboxPool.
+A minimal SandboxPool:
+
+```yaml
+apiVersion: litterbox.io/v1alpha1
+kind: SandboxPool
+metadata:
+  name: ubuntu
+spec:
+  templateID: ubuntu
+  targetReady: 2
+  maxCreating: 5
+  sandboxTemplate:  # compiled by the orchestrator; cloned per sandbox
+    templateID: ubuntu
+    image: ubuntu:22.04
+    resources: {limits: {cpu: 500m, memory: 512Mi}, requests: {cpu: 500m, memory: 512Mi}}
+    workspace: {enabled: true, mountPath: /workspace, size: 1Gi, storageClassName: local-path, claimName: ""}
+    envd: {enabled: true, hostBinaryPath: /opt/litterbox/bin/envd, containerBinaryPath: /opt/litterbox/envd/envd, port: 49983}
+    lifecycle: {}
+    state: Running
+    ttlSeconds: 0
+status:
+  ready: 2
+  creating: 0
+  allocated: 0
+```
+
+The orchestrator compiles `sandboxTemplate` once when the pool is created.
+The controller only rewrites the per-sandbox claim name and identity, then
+creates a normal `Sandbox`. Pool sandboxes start without TTL; the TTL is set
+when a sandbox is claimed.
+
+`sandboxTemplate` is a snapshot. Update the template and recreate the pool if
+the pool should use a new image, command or resource shape.
+
+A minimal Sandbox:
 
 ```yaml
 apiVersion: litterbox.io/v1alpha1
@@ -97,6 +149,7 @@ status:
 
 ```bash
 kubectl apply -f config/crd.yaml
+kubectl apply -f config/sandboxpool-crd.yaml
 kubectl apply -f config/rbac.yaml
 kubectl apply -f config/controller.yaml
 ```
@@ -104,24 +157,15 @@ kubectl apply -f config/controller.yaml
 The manifests assume the controller and the orchestrator run in namespace
 `litterbox`. Adjust the ServiceAccounts/bindings for your environment.
 
-Enable the backend in the orchestrator:
+The orchestrator uses this API unconditionally. CRD coordinates can be
+overridden if needed:
 
 ```toml
 [sandbox]
-backend = "crd"
 # crd_group = "litterbox.io"
 # crd_version = "v1alpha1"
 # crd_plural = "sandboxes"
 ```
-
-or:
-
-```bash
-ORCHESTRATOR__SANDBOX__BACKEND=crd
-```
-
-The legacy `deployment` backend remains the default, so existing deployments
-are unaffected until the switch is explicit.
 
 ## Build and test
 
@@ -153,6 +197,10 @@ k3d image import litterbox/sandbox-controller:local -c litterbox
 - **Image pull policy** defaults to `IfNotPresent` when `spec.imagePullPolicy`
   is empty, so locally imported images work without registry access. Set the
   field explicitly to `Always` if every sandbox must re-resolve its tag.
+- **Pool allocation** is a JSON Patch claim on `metadata.resourceVersion`.
+  There is no global lock; conflicting claims retry the next sandbox.
+- **Pool deletion** garbage-collects `creating` / `available` / `failed`
+  sandboxes. An `allocated` sandbox is detached at claim time and survives.
 
 ## E2E
 
@@ -160,3 +208,7 @@ k3d image import litterbox/sandbox-controller:local -c litterbox
 SDK: create, exec, file I/O, pod self-healing, pause/resume, TTL expiry,
 workspace persistence and kill. It also asserts the CR status and Kubernetes
 objects. See the script header for the required environment variables.
+
+`e2e/pool_crd_e2e.py` exercises warm-pool provisioning, optimistic claim,
+replenishment, and the guarantee that deleting a pool does not delete an
+already allocated sandbox.

@@ -90,15 +90,6 @@ class SandboxMetrics:
             self._creates.append(ev)
             self._evict()
 
-    # 向后兼容旧调用点
-    def record(self, *, template_id: str, duration: float, success: bool) -> None:
-        self.record_create(
-            template_id=template_id,
-            duration=duration,
-            success=success,
-            source="direct",
-        )
-
     def set_live_stats(self, stats: dict) -> None:
         """注入当前实时状态（由 snapshot 端点在调用前填入）。"""
         with self._lock:

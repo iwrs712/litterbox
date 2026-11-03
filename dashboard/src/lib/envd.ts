@@ -5,9 +5,34 @@ import type { ExecCommandResponse } from '@/types/sandbox';
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080';
 const TOKEN = (import.meta.env.VITE_API_BEARER_TOKEN as string || '').trim();
+const AUTO_RESTORE = (import.meta.env.VITE_ENVD_AUTO_RESTORE as string || '').trim() === 'true';
+
+function authHeaders(): Record<string, string> {
+  return TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {};
+}
 
 export function envdBaseUrl(sandboxId: string): string {
   return `${BASE_URL}/api/v1/sandboxes/${encodeURIComponent(sandboxId)}/envd`;
+}
+
+export async function restoreEnvdWorkspace(sandboxId: string): Promise<void> {
+  if (!AUTO_RESTORE) return;
+
+  const base = envdBaseUrl(sandboxId);
+  const health = await fetch(`${base}/health`, { headers: authHeaders() });
+  if (!health.ok) return;
+
+  const state = await health.json().catch(() => null) as { workspace?: string } | null;
+  if (state?.workspace !== 'restoring') return;
+
+  const response = await fetch(`${base}/v1/workspace/restore`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: '{}',
+  });
+  if (!response.ok) {
+    throw new Error(`workspace restore failed (${response.status})`);
+  }
 }
 
 const authInterceptor: Interceptor = (next) => async (request) => {
@@ -29,6 +54,8 @@ export async function runEnvdCommand(
   cwd = '/workspace',
 ): Promise<ExecCommandResponse> {
   if (command.length === 0) throw new Error('command must not be empty');
+
+  await restoreEnvdWorkspace(sandboxId);
 
   const startedAt = performance.now();
   const stdout = new TextDecoder();
@@ -107,10 +134,12 @@ function ptyEventData(event: ProcessEvent): Uint8Array | undefined {
   return output.case === 'pty' ? output.value : undefined;
 }
 
-export function openEnvdTerminal(
+export async function openEnvdTerminal(
   sandboxId: string,
   size: { cols: number; rows: number },
-): EnvdTerminalSession {
+): Promise<EnvdTerminalSession> {
+  await restoreEnvdWorkspace(sandboxId);
+
   const client = processClient(sandboxId);
   const abort = new AbortController();
   const output = new AsyncTextQueue();

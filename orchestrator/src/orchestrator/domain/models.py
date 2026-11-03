@@ -120,7 +120,7 @@ class WorkspaceConfigOverride(BaseModel):
 
 
 class WorkspaceConfig(BaseModel):
-    """Fully resolved workspace policy recorded on each Sandbox Deployment."""
+    """Fully resolved workspace policy recorded on each Sandbox resource."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -244,6 +244,7 @@ class Pool(BaseModel):
     min_ready: int = 0
     target_ready: int = 0
     max_creating: int = 5
+    sandbox_template: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
 
@@ -399,11 +400,6 @@ class ServiceExpose(BaseModel):
     message: str = ""
     created_at: datetime
     updated_at: datetime
-
-
-class ServiceExposeListResponse(BaseModel):
-    exposes: list[ServiceExpose]
-    total: int
 
 
 class WebhookRetryConfig(BaseModel):
