@@ -7,7 +7,7 @@
 Kubernetes-native. REST API and an E2B-compatible control plane. VM-level isolation with Kata Containers.
 <br>
 
-[简体中文](README.zh.md) · [API Reference](docs/api-reference.md) · [E2B Guide](orchestrator/docs/API.md) · [Configuration](docs/configuration.md)
+[简体中文](README.zh.md) · [API Reference](docs/api-reference.md) · [E2B Guide](orchestrator/docs/API.md) · [Configuration](docs/configuration.md) · [Sandbox Controller](controller/README.md)
 
 </div>
 
@@ -34,6 +34,7 @@ POST /api/v1/sandboxes    native REST control plane
 | **Warm pool** | Pre-boots sandboxes per template for low-latency allocation. |
 | **Workspace** | One persistent `/workspace` PVC per sandbox, retained across suspend and resume. |
 | **E2B compatible** | Official E2B SDKs can create, connect, pause, resume and kill sandboxes. |
+| **CRD backend** | Optional `Sandbox` custom resource and controller: level-triggered reconciliation, informer-cached reads, self-healing Pods, controller-driven TTL. |
 | **Lifecycle** | TTL auto-suspension, warm-pool reconciliation, sandbox lock, permanent delete. |
 | **Terminal & files** | Command execution, file I/O and PTY sessions through the envd data plane. |
 | **Expose** | Publish any sandbox port through a Service and Ingress. |
@@ -72,6 +73,7 @@ flowchart LR
         Proxy["envd proxy"]
     end
 
+    Controller["sandbox-controller\noptional CRD backend"]
     Redis[("Redis\nCelery · TTL · locks")]
 
     subgraph Cluster["Kubernetes"]
@@ -85,7 +87,9 @@ flowchart LR
     Sdk --> E2B
     Sdk -->|"envd"| Proxy
     Dashboard -->|"envd"| Proxy
-    Rest -->|"Kubernetes API"| Cluster
+    Rest -->|"deployment backend\nKubernetes API"| Cluster
+    Rest -->|"crd backend\nSandbox CR"| Controller
+    Controller -->|"Pod + PVC"| Sandbox
     E2B --> Rest
     Orchestrator <--> Redis
     Proxy -->|"Pod IP :49983"| Sandbox
@@ -93,7 +97,8 @@ flowchart LR
     NetPol -.-> Sandbox
 ```
 
-- **Control plane.** `/api/v1` manages templates, pools, webhooks, exposes and sandbox lifecycle. `/e2b` adapts the same services to the E2B SDK. Template, pool and webhook metadata live in ConfigMaps; sandbox state lives in Deployment labels and annotations; TTL schedules and locks live in Redis.
+- **Control plane.** `/api/v1` manages templates, pools, webhooks, exposes and sandbox lifecycle. `/e2b` adapts the same services to the E2B SDK. Template, pool and webhook metadata live in ConfigMaps.
+- **Lifecycle backend.** With `sandbox.backend = "deployment"` (default), the API creates Deployments and records sandbox state in labels, annotations and Redis. With `"crd"`, the API writes `Sandbox` custom resources; the controller owns Pods and PVCs, publishes `status.phase`, handles TTL expiry, and repairs deleted Pods. The REST and E2B APIs are identical in both modes.
 - **Data plane.** When enabled, each sandbox runs an envd process on port `49983`. The orchestrator proxies authenticated traffic to the Pod, either at `/api/v1/sandboxes/{id}/envd/*` or through E2B host routing.
 - **Isolation.** Sandboxes use a Kata RuntimeClass, a per-sandbox `/workspace` PVC, and optionally a NetworkPolicy allowlist for ingress and egress.
 
