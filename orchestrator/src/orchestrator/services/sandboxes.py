@@ -23,7 +23,9 @@ from orchestrator.domain.models import (
     WorkspaceConfigOverride,
 )
 from orchestrator.infra.kubernetes import KubernetesGateway
+from orchestrator.infra.sandbox_crd import SandboxCRDGateway
 from orchestrator.infra.ttl_queue import TTLEntry, TTLQueueRepository
+from orchestrator.services.sandbox_crd import SandboxCRDService, workspace_claim_name
 from orchestrator.services.templates import TemplateService
 from orchestrator.services.webhooks import WebhookDispatcher
 from orchestrator.utils import is_valid_label_part, parse_env_list, short_id, utcnow
@@ -34,6 +36,10 @@ class SandboxResumeLockedError(RuntimeError):
 
 
 class SandboxService:
+    # Class-level default keeps hand-built test doubles working; production
+    # instances overwrite it in __init__ when the CRD backend is enabled.
+    crd: SandboxCRDService | None = None
+
     def __init__(
         self,
         gateway: KubernetesGateway,
@@ -47,6 +53,13 @@ class SandboxService:
         self.webhook_dispatcher = webhook_dispatcher
         self.ttl_queue = ttl_queue
         self.settings = settings
+        self.crd: SandboxCRDService | None = None
+        if settings.sandbox.backend == "crd":
+            self.crd = SandboxCRDService(
+                settings,
+                gateway,
+                SandboxCRDGateway(gateway, settings),
+            )
         # Set after construction to avoid a circular dependency with
         # ServiceExposeService (which itself holds a SandboxService reference).
         # container.py calls  sandbox_service.expose_service = expose_service
@@ -70,6 +83,19 @@ class SandboxService:
         workspace: WorkspaceConfigOverride | None = None,
     ) -> SandboxResponse:
         from orchestrator.services.metrics import sandbox_metrics  # 延迟导入，避免循环
+
+        if self.crd is not None:
+            return self._create_sandbox_crd(
+                template_id=template_id,
+                name=name,
+                metadata=metadata,
+                env=env,
+                pool_state=pool_state,
+                wait_ready=wait_ready,
+                dispatch_events=dispatch_events,
+                ttl_seconds=ttl_seconds,
+                workspace=workspace,
+            )
 
         metadata = metadata or {}
         template = self.template_service.get_template(template_id)
@@ -120,7 +146,68 @@ class SandboxService:
             self._dispatch_running_events(sandbox, template, pod)
         return sandbox
 
+    def _create_sandbox_crd(
+        self,
+        *,
+        template_id: str,
+        name: str,
+        metadata: dict[str, str] | None,
+        env: list[str] | None,
+        pool_state: str,
+        wait_ready: bool,
+        dispatch_events: bool,
+        ttl_seconds: int | None,
+        workspace: WorkspaceConfigOverride | None,
+    ) -> SandboxResponse:
+        from orchestrator.services.metrics import sandbox_metrics
+
+        assert self.crd is not None
+        metadata = metadata or {}
+        template = self.template_service.get_template(template_id)
+        sandbox_id = short_id()
+        resolved_workspace = self._resolve_workspace(template, workspace)
+        sandbox = self.crd.create(
+            sandbox_id=sandbox_id,
+            template=template,
+            metadata=metadata,
+            name=name,
+            env=env,
+            pool_state=pool_state,
+            ttl_seconds=ttl_seconds,
+            workspace=resolved_workspace,
+        )
+        pod = None
+        if wait_ready:
+            _t0 = time.perf_counter()
+            _success = False
+            try:
+                pod = self.gateway.wait_for_pod_ready(
+                    f"app={sandbox_id},component=sandbox"
+                )
+                _success = True
+            finally:
+                sandbox_metrics.record_create(
+                    template_id=template_id,
+                    duration=time.perf_counter() - _t0,
+                    success=_success,
+                    source="direct",
+                )
+            # The Pod is already serving; a status update that arrives a moment
+            # later must not make the create response look unfinished.
+            self.crd.wait_until_running(sandbox_id)
+        sandbox = self.get_sandbox(sandbox_id)
+        if dispatch_events and pool_state == PoolState.NONE:
+            self._dispatch_running_events(sandbox, template, pod)
+        return sandbox
+
     def get_sandbox(self, sandbox_id: str) -> SandboxResponse:
+        if self.crd is not None:
+            sandbox = self.crd.get(sandbox_id)
+            try:
+                template = self.template_service.get_template(sandbox.template_id)
+            except Exception:
+                template = None
+            return SandboxResponse.from_sandbox(sandbox, template)
         deployment = self.gateway.read_deployment(sandbox_id)
         sandbox = self._deployment_to_sandbox(deployment)
         try:
@@ -130,40 +217,41 @@ class SandboxService:
         return SandboxResponse.from_sandbox(sandbox, template)
 
     def list_sandboxes(self, opts: QueryOptions) -> SandboxListResponse:
-        # ── K8s label-selector push-down ────────────────────────────────────
-        # Build the selector from fields that are stored as K8s labels so that
-        # the K8s API server does the heavy lifting instead of us fetching every
-        # sandbox and filtering in Python.
-        #
+        label_selector = self._sandbox_label_selector(opts)
+        if self.crd is not None:
+            return self._sandbox_list_response(self.crd.list(label_selector), opts)
+        deployments = self.gateway.list_deployments(label_selector)
+        return self._sandbox_list_response(
+            [self._deployment_to_sandbox(deployment) for deployment in deployments],
+            opts,
+        )
+
+    @staticmethod
+    def _sandbox_label_selector(opts: QueryOptions) -> str:
         # Fields that CAN be pushed down (stored as labels):
         #   - component=sandbox  (always)
         #   - litterbox.io/template-id
         #   - litterbox.io/pool-state  (when pool_state != PoolState.NONE)
         #
-        # Fields that CANNOT be pushed down (stored in annotations or derived
-        # from Deployment status at read-time):
-        #   - status   (derived from spec.replicas / status.readyReplicas)
-        #   - name     (annotation litterbox.io/allocated-name)
-        #   - metadata (annotation litterbox.io/user-metadata-*)
-        # These are filtered below in Python after the K8s list.
+        # status/name/metadata are filtered in memory because they are derived
+        # from status or stored as annotations.
         selector_parts = ["component=sandbox"]
         if opts.template_id:
             selector_parts.append(f"litterbox.io/template-id={opts.template_id}")
         if opts.pool_state and opts.pool_state != PoolState.NONE:
             selector_parts.append(f"litterbox.io/pool-state={opts.pool_state}")
         elif opts.pool_state == PoolState.NONE:
-            # NONE means "not pool-managed"; those deployments have no pool-state
-            # label at all, so we can filter them out by excluding managed ones.
             selector_parts.append("!litterbox.io/pool-state")
+        return ",".join(selector_parts)
 
-        label_selector = ",".join(selector_parts)
-        deployments = self.gateway.list_deployments(label_selector)
-
-        sandboxes: list[SandboxResponse] = []
+    def _sandbox_list_response(
+        self,
+        sandboxes: list[Sandbox],
+        opts: QueryOptions,
+    ) -> SandboxListResponse:
+        responses: list[SandboxResponse] = []
         template_cache: dict[str, Template] = {}
-        for deployment in deployments:
-            sandbox = self._deployment_to_sandbox(deployment)
-            # ── remaining in-memory filters ──────────────────────────────────
+        for sandbox in sandboxes:
             if opts.status and sandbox.status != opts.status:
                 continue
             if opts.name and opts.name not in sandbox.name:
@@ -183,20 +271,28 @@ class SandboxService:
                     template = None
                 if template is not None:
                     template_cache[sandbox.template_id] = template
-            sandboxes.append(SandboxResponse.from_sandbox(sandbox, template))
+            responses.append(SandboxResponse.from_sandbox(sandbox, template))
 
-        sandboxes.sort(key=lambda item: item.created_at, reverse=True)
-        total = len(sandboxes)
+        responses.sort(key=lambda item: item.created_at, reverse=True)
+        total = len(responses)
         start = max(opts.page - 1, 0) * opts.page_size
         end = start + opts.page_size
         return SandboxListResponse(
             total=total,
             page=opts.page,
             page_size=opts.page_size,
-            sandboxes=sandboxes[start:end],
+            sandboxes=responses[start:end],
         )
 
     def update_sandbox(self, sandbox_id: str, req: UpdateSandboxRequest) -> SandboxResponse:
+        if self.crd is not None:
+            cr = self.crd.get_cr(sandbox_id)
+            cr_metadata = cr.get("metadata") or {}
+            labels = dict(cr_metadata.get("labels") or {})
+            annotations = dict(cr_metadata.get("annotations") or {})
+            self._apply_user_updates(req, labels=labels, annotations=annotations)
+            self.crd.patch_metadata(sandbox_id, labels=labels, annotations=annotations)
+            return self.get_sandbox(sandbox_id)
         deployment = self.gateway.read_deployment(sandbox_id)
         labels = dict(deployment.metadata.labels or {})
         annotations = dict(deployment.metadata.annotations or {})
@@ -214,6 +310,9 @@ class SandboxService:
         return self.get_sandbox(sandbox_id)
 
     def update_pool_state(self, sandbox_id: str, pool_state: str) -> None:
+        if self.crd is not None:
+            self.crd.set_pool_state(sandbox_id, pool_state)
+            return
         deployment = self.gateway.read_deployment(sandbox_id)
         labels = {**(deployment.metadata.labels or {}), "litterbox.io/pool-state": pool_state}
         self._patch_deployment_metadata(sandbox_id, labels=labels)
@@ -226,6 +325,25 @@ class SandboxService:
         metadata: dict[str, str],
         ttl_seconds: int,
     ) -> SandboxResponse:
+        if self.crd is not None:
+            cr = self.crd.get_cr(sandbox_id)
+            cr_metadata = cr.get("metadata") or {}
+            labels = dict(cr_metadata.get("labels") or {})
+            annotations = dict(cr_metadata.get("annotations") or {})
+            self._apply_user_updates(
+                UpdateSandboxRequest(name=name, metadata=metadata),
+                labels=labels,
+                annotations=annotations,
+            )
+            labels["litterbox.io/pool-state"] = PoolState.ALLOCATED
+            annotations["litterbox.io/allocated-at"] = utcnow().isoformat()
+            self.crd.mark_allocated(
+                sandbox_id,
+                labels=labels,
+                annotations=annotations,
+                ttl_seconds=ttl_seconds,
+            )
+            return self.get_sandbox(sandbox_id)
         deployment = self.gateway.read_deployment(sandbox_id)
         labels = dict(deployment.metadata.labels or {})
         annotations = dict(deployment.metadata.annotations or {})
@@ -274,12 +392,21 @@ class SandboxService:
             namespace=self.gateway.namespace,
             deletion_reason=deletion_reason,
         )
+        if self.crd is not None:
+            # Pod and PVC carry an ownerReference to the Sandbox, so the
+            # controller's garbage collection removes them with the CR.
+            self.crd.delete(sandbox_id, grace_period_seconds=grace_period_seconds)
+            return
         self.gateway.delete_deployment(sandbox_id, grace_period_seconds=grace_period_seconds)
         workspace = getattr(sandbox, "workspace", None)
         if workspace.enabled if workspace is not None else self.settings.workspace.enabled:
             self.gateway.delete_persistent_volume_claim(self._workspace_claim_name(sandbox_id))
 
     def suspend_sandbox(self, sandbox_id: str, *, ttl_expired: bool = False) -> SandboxResponse:
+        if self.crd is not None:
+            self.crd.suspend(sandbox_id, ttl_expired=ttl_expired)
+            self.crd.wait_until_paused(sandbox_id)
+            return self.get_sandbox(sandbox_id)
         deployment = self.gateway.read_deployment(sandbox_id)
         annotations = dict(deployment.metadata.annotations or {})
 
@@ -310,6 +437,18 @@ class SandboxService:
         return self.get_sandbox(sandbox_id)
 
     def resume_sandbox(self, sandbox_id: str) -> SandboxResponse:
+        if self.crd is not None:
+            cr = self.crd.get_cr(sandbox_id)
+            annotations = (cr.get("metadata") or {}).get("annotations") or {}
+            if annotations.get("litterbox.io/resume-locked") == "true":
+                raise SandboxResumeLockedError(
+                    f"sandbox {sandbox_id} is locked and cannot be resumed"
+                )
+            ttl_seconds = int((cr.get("spec") or {}).get("ttlSeconds") or 0)
+            self.crd.resume(sandbox_id, ttl_seconds=ttl_seconds)
+            self.gateway.wait_for_pod_ready(f"app={sandbox_id},component=sandbox")
+            self.crd.wait_until_running(sandbox_id)
+            return self.get_sandbox(sandbox_id)
         deployment = self.gateway.read_deployment(sandbox_id)
         annotations = dict(deployment.metadata.annotations or {})
         if annotations.get("litterbox.io/resume-locked") == "true":
@@ -335,6 +474,9 @@ class SandboxService:
         return self.get_sandbox(sandbox_id)
 
     def lock_sandbox(self, sandbox_id: str) -> SandboxResponse:
+        if self.crd is not None:
+            self.crd.lock(sandbox_id)
+            return self.get_sandbox(sandbox_id)
         deployment = self.gateway.read_deployment(sandbox_id)
         annotations = dict(deployment.metadata.annotations or {})
         if annotations.get("litterbox.io/resume-locked") != "true":
@@ -344,6 +486,9 @@ class SandboxService:
         return self.get_sandbox(sandbox_id)
 
     def unlock_sandbox(self, sandbox_id: str) -> SandboxResponse:
+        if self.crd is not None:
+            self.crd.unlock(sandbox_id)
+            return self.get_sandbox(sandbox_id)
         deployment = self.gateway.read_deployment(sandbox_id)
         annotations = dict(deployment.metadata.annotations or {})
         annotations_to_remove = tuple(
@@ -363,6 +508,9 @@ class SandboxService:
         return self.get_sandbox(sandbox_id)
 
     def update_ttl(self, sandbox_id: str, ttl_seconds: int) -> None:
+        if self.crd is not None:
+            self.crd.set_ttl(sandbox_id, ttl_seconds)
+            return
         deployment = self.gateway.read_deployment(sandbox_id)
         annotations = dict(deployment.metadata.annotations or {})
         previous_token = annotations.get("litterbox.io/ttl-token", "")
@@ -371,6 +519,13 @@ class SandboxService:
         self._sync_ttl_schedule(sandbox_id, annotations, previous_token=previous_token)
 
     def renew_ttl(self, sandbox_id: str, ttl_seconds: int = 0) -> None:
+        if self.crd is not None:
+            cr = self.crd.get_cr(sandbox_id)
+            current_ttl = int((cr.get("spec") or {}).get("ttlSeconds") or 0)
+            if current_ttl == 0:
+                raise ValueError("sandbox does not have TTL enabled")
+            self.crd.set_ttl(sandbox_id, ttl_seconds or current_ttl)
+            return
         deployment = self.gateway.read_deployment(sandbox_id)
         annotations = dict(deployment.metadata.annotations or {})
         current_ttl = int(annotations.get("litterbox.io/ttl-seconds", "0"))
@@ -384,6 +539,10 @@ class SandboxService:
         self._sync_ttl_schedule(sandbox_id, annotations, previous_token=previous_token)
 
     def cleanup_expired(self) -> int:
+        if self.crd is not None:
+            # Expiry is part of the controller's reconcile loop; there is no
+            # periodic scan for the API process to run.
+            return 0
         suspended = 0
         for deployment in self.gateway.list_deployments("component=sandbox"):
             annotations = deployment.metadata.annotations or {}
@@ -396,6 +555,9 @@ class SandboxService:
         return suspended
 
     def delete_if_ttl_due(self, sandbox_id: str, ttl_token: str) -> bool:
+        if self.crd is not None:
+            # The controller owns TTL; drain any legacy queue entry harmlessly.
+            return False
         try:
             deployment = self.gateway.read_deployment(sandbox_id)
         except ApiException as exc:
@@ -413,7 +575,7 @@ class SandboxService:
 
     @staticmethod
     def _workspace_claim_name(sandbox_id: str) -> str:
-        return f"workspace-{sandbox_id}"
+        return workspace_claim_name(sandbox_id)
 
     def _build_workspace_claim(
         self,
@@ -853,6 +1015,8 @@ class SandboxService:
         *,
         previous_token: str = "",
     ) -> None:
+        if self.crd is not None:
+            return
         current_token = annotations.get("litterbox.io/ttl-token", "")
         if previous_token and previous_token != current_token:
             self.ttl_queue.unschedule(TTLEntry(sandbox_id=sandbox_id, ttl_token=previous_token))
@@ -864,6 +1028,8 @@ class SandboxService:
             )
 
     def _unschedule_current_ttl(self, sandbox_id: str) -> None:
+        if self.crd is not None:
+            return
         try:
             deployment = self.gateway.read_deployment(sandbox_id)
         except Exception:  # noqa: BLE001

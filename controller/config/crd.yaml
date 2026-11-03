@@ -1,0 +1,242 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: sandboxes.litterbox.io
+spec:
+  group: litterbox.io
+  scope: Namespaced
+  names:
+    kind: Sandbox
+    listKind: SandboxList
+    plural: sandboxes
+    singular: sandbox
+    shortNames:
+      - sbx
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Template
+          type: string
+          jsonPath: .spec.templateID
+        - name: Pod IP
+          type: string
+          jsonPath: .status.podIP
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required:
+                - templateID
+                - image
+                - resources
+                - workspace
+                - envd
+                - lifecycle
+              properties:
+                templateID:
+                  type: string
+                image:
+                  type: string
+                command:
+                  type: array
+                  items:
+                    type: string
+                env:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - name
+                      - value
+                    properties:
+                      name:
+                        type: string
+                      value:
+                        type: string
+                resources:
+                  type: object
+                  required:
+                    - limits
+                    - requests
+                  properties:
+                    limits:
+                      type: object
+                      required:
+                        - cpu
+                        - memory
+                      properties:
+                        cpu:
+                          type: string
+                        memory:
+                          type: string
+                    requests:
+                      type: object
+                      required:
+                        - cpu
+                        - memory
+                      properties:
+                        cpu:
+                          type: string
+                        memory:
+                          type: string
+                runtimeClassName:
+                  type: string
+                imagePullSecret:
+                  type: string
+                imagePullPolicy:
+                  type: string
+                  enum:
+                    - Always
+                    - IfNotPresent
+                    - Never
+                nodeSelector:
+                  type: object
+                  additionalProperties:
+                    type: string
+                hostPathMounts:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - hostPath
+                      - containerPath
+                    properties:
+                      hostPath:
+                        type: string
+                      containerPath:
+                        type: string
+                      readOnly:
+                        type: boolean
+                workspace:
+                  type: object
+                  required:
+                    - enabled
+                    - mountPath
+                    - size
+                    - claimName
+                  properties:
+                    enabled:
+                      type: boolean
+                    mountPath:
+                      type: string
+                    size:
+                      type: string
+                    storageClassName:
+                      type: string
+                    claimName:
+                      type: string
+                envd:
+                  type: object
+                  required:
+                    - enabled
+                  properties:
+                    enabled:
+                      type: boolean
+                    hostBinaryPath:
+                      type: string
+                    containerBinaryPath:
+                      type: string
+                    port:
+                      type: integer
+                      format: int32
+                      minimum: 1
+                      maximum: 65535
+                lifecycle:
+                  type: object
+                  properties:
+                    postStart:
+                      type: array
+                      items:
+                        type: string
+                    preStop:
+                      type: array
+                      items:
+                        type: string
+                    terminationGracePeriodSeconds:
+                      type: integer
+                      format: int64
+                      minimum: 0
+                state:
+                  type: string
+                  enum:
+                    - Running
+                    - Paused
+                ttlSeconds:
+                  type: integer
+                  format: int64
+                  minimum: 0
+                ttlAnchor:
+                  type: string
+                  format: date-time
+                appArmorUnconfined:
+                  type: boolean
+                stdin:
+                  type: boolean
+                tty:
+                  type: boolean
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  enum:
+                    - Pending
+                    - Running
+                    - Paused
+                    - Failed
+                podName:
+                  type: string
+                podIP:
+                  type: string
+                expiresAt:
+                  type: string
+                  format: date-time
+                observedGeneration:
+                  type: integer
+                  format: int64
+                pausedReason:
+                  type: string
+                conditions:
+                  type: array
+                  x-kubernetes-list-type: map
+                  x-kubernetes-list-map-keys:
+                    - type
+                  items:
+                    type: object
+                    required:
+                      - type
+                      - status
+                      - reason
+                      - message
+                      - lastTransitionTime
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                        enum:
+                          - "True"
+                          - "False"
+                          - Unknown
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      observedGeneration:
+                        type: integer
+                        format: int64

@@ -1,0 +1,14 @@
+# Fast local image for clusters that can import a locally cross-compiled
+# binary (for example k3d). Build the binary first:
+#
+#   CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
+#     go build -trimpath -ldflags='-s -w' -o bin/controller-linux-arm64 ./cmd/controller
+#   docker build -f Dockerfile.cross \
+#     --build-arg BINARY=bin/controller-linux-arm64 \
+#     -t litterbox/sandbox-controller:local .
+FROM scratch
+
+ARG BINARY=bin/controller-linux-amd64
+COPY ${BINARY} /controller
+USER 65532:65532
+ENTRYPOINT ["/controller"]

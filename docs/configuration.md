@@ -114,19 +114,31 @@ image_pull_secret = ""
 |---|---|---|---|
 | `max_sandboxes` | integer | `1000` | 沙箱数量上限配置。当前用于限制 envd Pod IP 缓存大小，未在创建路径强制拒绝 |
 | `base_domain` | string | `"example.com"` | HTTP 暴露的通配符域名。每个沙箱的暴露端口路由为 `<sandbox-id>.<base_domain>`。需要配置 `*.<base_domain>` 的 DNS 记录指向 Ingress Controller |
+| `backend` | `"deployment"` / `"crd"` | `"deployment"` | 沙箱生命周期后端。`deployment` 为旧的命令式路径；`crd` 写入 `Sandbox` 自定义资源，由 `sandbox-controller` 收敛 Pod 和 PVC |
+| `crd_group` | string | `"litterbox.io"` | `crd` 后端的 CRD API group |
+| `crd_version` | string | `"v1alpha1"` | `crd` 后端的 CRD version |
+| `crd_plural` | string | `"sandboxes"` | `crd` 后端的 CRD plural |
 
 **环境变量：**
 
 ```
 ORCHESTRATOR__SANDBOX__MAX_SANDBOXES=1000
 ORCHESTRATOR__SANDBOX__BASE_DOMAIN=sandbox.example.com
+ORCHESTRATOR__SANDBOX__BACKEND=crd
 ```
 
 ```toml
 [sandbox]
 max_sandboxes = 1000
 base_domain   = "example.com"
+backend       = "crd"
 ```
+
+> **`crd` 后端**需要在集群中安装 `controller/config/crd.yaml`、
+> `controller/config/rbac.yaml` 和 `controller/config/controller.yaml`，并确保
+> orchestrator 的 ServiceAccount 有 `sandboxes.litterbox.io` 的读写权限。
+> 切换到 `crd` 后，TTL 到期由控制器在 reconcile 中处理，不再使用 Redis TTL
+> 队列；工作区 PVC 与 Pod 通过 `ownerReference` 随 Sandbox 一起回收。
 
 ---
 
@@ -481,6 +493,10 @@ bearer_token = "replace-with-strong-token"
 | `ORCHESTRATOR__E2B__ENVD_VERSION` | `e2b.envd_version` | `0.1.0` |
 | `ORCHESTRATOR__SANDBOX__MAX_SANDBOXES` | `sandbox.max_sandboxes` | `1000` |
 | `ORCHESTRATOR__SANDBOX__BASE_DOMAIN` | `sandbox.base_domain` | `example.com` |
+| `ORCHESTRATOR__SANDBOX__BACKEND` | `sandbox.backend` | `deployment` |
+| `ORCHESTRATOR__SANDBOX__CRD_GROUP` | `sandbox.crd_group` | `litterbox.io` |
+| `ORCHESTRATOR__SANDBOX__CRD_VERSION` | `sandbox.crd_version` | `v1alpha1` |
+| `ORCHESTRATOR__SANDBOX__CRD_PLURAL` | `sandbox.crd_plural` | `sandboxes` |
 | `ORCHESTRATOR__TTL__DEFAULT_TTL_SECONDS` | `ttl.default_ttl_seconds` | `1800` |
 | `ORCHESTRATOR__TTL__MIN_TTL_SECONDS` | `ttl.min_ttl_seconds` | `60` |
 | `ORCHESTRATOR__TTL__MAX_TTL_SECONDS` | `ttl.max_ttl_seconds` | `86400` |
