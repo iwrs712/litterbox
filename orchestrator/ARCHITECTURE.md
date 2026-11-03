@@ -241,7 +241,7 @@ The project spreads state across Kubernetes and Redis:
 - `Ingress`
   HTTP exposure routing
 
-Sandbox Pods also mount the node-local envd binary from `/opt/litterbox/bin/sandbox-agent` as a read-only `hostPath`. `NetworkPolicy` objects that restrict sandbox ingress/egress are installed separately as part of cluster setup, not created by the orchestrator.
+Sandbox Pods also mount the node-local envd binary from `/opt/litterbox/bin/envd` as a read-only `hostPath`. `NetworkPolicy` objects that restrict sandbox ingress/egress are installed separately as part of cluster setup, not created by the orchestrator.
 
 Most sandbox metadata is stored in deployment labels and annotations, not in an external database.
 
@@ -287,7 +287,7 @@ POST /sandboxes
 - optional image pull secret
 - workspace PVC mounted at `/workspace`
 - optional envd binary installed by a node DaemonSet, mounted read-only from
-  `/opt/litterbox/bin/sandbox-agent`, and started with `postStart`
+  `/opt/litterbox/bin/envd`, and started with `postStart`
 - optional host-path volume mounts
 - labels/annotations carrying logical metadata
 
@@ -375,7 +375,7 @@ TTL expiry uses the same suspension path but also clears the TTL schedule and re
 
 There is one access mode: the envd data plane.
 
-- commands, file operations and PTY streams are served by `sandbox-agent` (envd) inside the main container on port `49983`
+- commands, file operations and PTY streams are served by envd inside the main container on port `49983`
 - the orchestrator authenticates and proxies traffic, either path-based at `/api/v1/sandboxes/{id}/envd/*` or via E2B host routing at `49983-{sandbox-id}.{domain}`
 - the dashboard uses the same path-based proxy with its bearer token
 - `/workspace` is a per-sandbox PVC, so files survive suspend/resume and disappear only on permanent delete

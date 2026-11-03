@@ -3,7 +3,7 @@
 ## Objective
 
 Replace the Litterbox Kubernetes Exec based data plane with the E2B-compatible
-envd implementation in `sandbox-agent-go`. The dashboard must use envd for
+envd implementation in `envd`. The dashboard must use envd for
 process execution and terminal sessions. The orchestrator remains responsible
 for authentication, sandbox lifecycle, and resolving a sandbox ID to its
 running Pod.
@@ -62,7 +62,7 @@ main container. A Kubernetes `postStart.exec` action invokes the static binary's
 detached daemon command inside the main container namespaces and cgroup:
 
 ```text
-/opt/litterbox/envd/sandbox-agent daemon \
+/opt/litterbox/bin/envd daemon \
   --host 0.0.0.0 \
   --port 49983 \
   --filesystem-root /
@@ -119,7 +119,7 @@ TTL, Pool, Expose, Webhook, and metrics APIs remain unchanged.
 
 ## Go envd Cleanup
 
-The following legacy REST routes are removed from `sandbox-agent-go`:
+The following legacy REST routes are removed from `envd`:
 
 ```text
 /v1/fs/*

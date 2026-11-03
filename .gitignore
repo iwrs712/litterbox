@@ -78,8 +78,7 @@ litterbox-kata.zip
 front/
 # External reference project (not part of litterbox)
 AgentENV-main/
-# Local-only components, not published to this repo
-sandbox-agent-go/
+# Local-only sandbox image sources
 sandbox-image/
 # Private deployment and runtime scripts (kept local, never committed)
 /Makefile

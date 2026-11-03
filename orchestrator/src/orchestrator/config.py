@@ -46,8 +46,8 @@ class WorkspaceConfig(BaseModel):
 class EnvdConfig(BaseModel):
     enabled: bool = False
     version: str = "0.1.0"
-    host_binary_path: str = "/opt/litterbox/bin/sandbox-agent"
-    container_binary_path: str = "/opt/litterbox/envd/sandbox-agent"
+    host_binary_path: str = "/opt/litterbox/bin/envd"
+    container_binary_path: str = "/opt/litterbox/bin/envd"
     port: int = Field(default=49983, ge=1, le=65535)
     connect_timeout_seconds: float = Field(default=3.0, gt=0)
     pod_ip_cache_ttl_seconds: float = Field(default=5.0, ge=0)

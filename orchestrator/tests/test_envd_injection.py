@@ -54,8 +54,8 @@ def test_envd_config_defaults_to_disabled() -> None:
     assert envd == EnvdConfig(
         enabled=False,
         version="0.1.0",
-        host_binary_path="/opt/litterbox/bin/sandbox-agent",
-        container_binary_path="/opt/litterbox/envd/sandbox-agent",
+        host_binary_path="/opt/litterbox/bin/envd",
+        container_binary_path="/opt/litterbox/bin/envd",
         port=49983,
         connect_timeout_seconds=3.0,
         pod_ip_cache_ttl_seconds=5.0,
@@ -65,7 +65,7 @@ def test_envd_config_defaults_to_disabled() -> None:
 @pytest.mark.parametrize("field", ["host_binary_path", "container_binary_path"])
 def test_envd_binary_paths_must_be_absolute(field: str) -> None:
     with pytest.raises(ValueError, match="envd binary paths must be absolute"):
-        EnvdConfig.model_validate({field: "relative/sandbox-agent"})
+        EnvdConfig.model_validate({field: "relative/envd"})
 
 
 def test_envd_version_must_not_be_empty() -> None:
@@ -95,12 +95,12 @@ def test_build_deployment_injects_envd() -> None:
     volume = next(item for item in pod_spec.volumes if item.name == "envd")
     mount = next(item for item in container.volume_mounts if item.name == "envd")
 
-    assert volume.host_path.path == "/opt/litterbox/bin/sandbox-agent"
+    assert volume.host_path.path == "/opt/litterbox/bin/envd"
     assert volume.host_path.type == "File"
-    assert mount.mount_path == "/opt/litterbox/envd/sandbox-agent"
+    assert mount.mount_path == "/opt/litterbox/bin/envd"
     assert mount.read_only is True
     assert container.lifecycle.post_start._exec.command == [
-        "/opt/litterbox/envd/sandbox-agent",
+        "/opt/litterbox/bin/envd",
         "daemon",
         "--host",
         "0.0.0.0",
