@@ -21,11 +21,7 @@ pip install -e ".[dev]"
 
 ### Configure
 
-```bash
-cp config.toml config-local.toml
-```
-
-Edit `config-local.toml` — at minimum set your kubeconfig path and namespace:
+The backend always loads `orchestrator/config.toml`. Edit it directly — there is no config-path environment variable — or override individual keys with `ORCHESTRATOR__*` variables:
 
 ```toml
 [kubernetes]
@@ -37,9 +33,9 @@ broker_url     = "redis://localhost:6379/2"
 result_backend = "redis://localhost:6379/2"
 ```
 
-Set the config path via env var:
 ```bash
-export ORCHESTRATOR_CONFIG=./config-local.toml
+export ORCHESTRATOR__KUBERNETES__KUBECONFIG=/home/youruser/.kube/config
+export ORCHESTRATOR__KUBERNETES__NAMESPACE=litterbox-dev
 ```
 
 ### Run Services
@@ -90,37 +86,49 @@ pytest --cov=orchestrator --cov-report=term-missing
 ```
 orchestrator/src/orchestrator/
 ├── domain/
-│   └── models.py          # All Pydantic v2 models (Template, Sandbox, Pool, Webhook…)
+│   ├── models.py          # Pydantic v2 models (Template, Sandbox, Pool, Webhook…)
+│   └── e2b_models.py      # E2B-compatible request/response models
 ├── infra/
 │   ├── kubernetes.py      # KubernetesGateway — every K8s API call lives here
 │   ├── repositories.py    # ConfigMap-backed repos (TemplateRepo, PoolRepo, WebhookRepo)
 │   └── ttl_queue.py       # Redis sorted-set TTL queue operations
+├── routes/                # HTTP transports
+│   ├── templates.py
+│   ├── sandboxes.py
+│   ├── pools.py
+│   ├── exposes.py
+│   ├── webhooks.py
+│   ├── metrics.py
+│   ├── envd.py            # envd path proxy + E2B wildcard host routing
+│   └── e2b.py             # E2B control plane
 ├── services/
 │   ├── sandboxes.py       # Sandbox lifecycle business logic
 │   ├── pools.py           # Pool management + reconcile loop
 │   ├── templates.py       # Template CRUD
 │   ├── webhooks.py        # Webhook delivery
-│   ├── workspace.py       # File ops + exec inside sandboxes
+│   ├── envd_proxy.py      # Authenticated proxy to the sandbox envd process
+│   ├── e2b.py             # E2B control-plane adapter
 │   ├── exposes.py         # Service/Ingress expose management
 │   ├── metrics.py         # Prometheus + in-memory snapshot
 │   └── ttl.py             # TTL service layer
 ├── container.py           # Dependency injection — wires all services together
-├── main.py                # FastAPI app, all route definitions, DI bootstrap
+├── main.py                # FastAPI app, middleware and router wiring
 ├── tasks.py               # Celery task definitions
 ├── celery_app.py          # Celery app instance
-├── config.py              # Settings model (pydantic-settings, TOML + env vars)
+├── config.py              # Settings model (TOML + env vars)
+├── auth.py                # Bearer and E2B API-key checks
 ├── utils.py               # Shared utilities (short_id, label sanitization…)
 └── worker_runner.py       # Entry point for non-Celery workers (TTL scanner)
 ```
 
 ---
 
-## Frontend (`frontend/`)
+## Frontend (`dashboard/`)
 
 ### Setup
 
 ```bash
-cd frontend
+cd dashboard
 npm install          # or: pnpm install
 ```
 
@@ -132,6 +140,7 @@ cp .env.example .env
 
 ```dotenv
 VITE_API_BASE_URL=http://localhost:8080
+VITE_API_BEARER_TOKEN=
 ```
 
 ### Run
@@ -143,11 +152,13 @@ npm run dev
 # Type-check only (no emit)
 npm run check
 
-# Production build → dist/
+# Production build → dist/ (runs `buf generate` first)
 npm run build
 
 # Preview production build locally
 npm run preview
 ```
+
+> The dashboard contains generated envd protobuf clients. `npm run build` regenerates them with `buf`; run `npm run generate:envd` after changing the proto definitions.
 
 

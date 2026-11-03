@@ -4,20 +4,58 @@ Base URL: `http://your-host:8080`
 
 All request and response bodies use `application/json`. Timestamps are ISO 8601 UTC strings.
 
+Litterbox exposes two API surfaces:
+
+| Surface | Prefix | Auth |
+|---|---|---|
+| Private REST API | `/api/v1` | `Authorization: Bearer <ORCHESTRATOR__AUTH__BEARER_TOKEN>` when configured |
+| E2B-compatible control plane | `/e2b` | `X-API-Key` (or `X-Access-Token` / Bearer) when configured |
+
+When neither token is configured, both surfaces are open. The private API wraps every response in an [`ApiResponse`](#response-envelope); E2B routes return native E2B objects instead. See the [E2B API Guide](../orchestrator/docs/API.md) for SDK usage.
+
+Command execution, file I/O and PTY sessions are **not** plain REST endpoints. They run through the envd data plane — see [Data Plane (envd)](#data-plane-envd).
+
 ---
 
 ## Table of Contents
 
+- [Response Envelope](#response-envelope)
 - [Health](#health)
 - [Templates](#templates)
 - [Sandboxes](#sandboxes)
   - [Lifecycle](#lifecycle)
-  - [Files & Exec](#files--exec)
   - [TTL](#ttl)
+  - [Data Plane (envd)](#data-plane-envd)
   - [Service Exposes](#service-exposes)
 - [Pools](#pools)
 - [Webhooks](#webhooks)
+- [E2B Control Plane](#e2b-control-plane)
 - [Metrics](#metrics)
+
+---
+
+## Response Envelope
+
+Private `/api/v1` endpoints return:
+
+```json
+{
+  "success": true,
+  "message": "optional message",
+  "data": {}
+}
+```
+
+Errors return:
+
+```json
+{
+  "success": false,
+  "error": "human-readable error"
+}
+```
+
+E2B endpoints return native E2B objects and errors as `{"code": "...", "message": "..."}`.
 
 ---
 
@@ -25,45 +63,53 @@ All request and response bodies use `application/json`. Timestamps are ISO 8601 
 
 ### `GET /health`
 
-Returns service health status.
-
 ```bash
 curl http://localhost:8080/health
 ```
 
 **Response `200`**
+
 ```json
-{ "status": "ok" }
+{ "success": true, "message": "Litterbox API is running" }
+```
+
+### `GET /`
+
+Returns the service name and version.
+
+```json
+{ "message": "Litterbox API is running", "version": "1.0.0" }
 ```
 
 ---
 
 ## Templates
 
-Templates define the resource blueprint for sandboxes (image, CPU, memory, env vars, TTL, etc.).
+Templates define the image, resources, environment and workspace policy for sandboxes.
 
 ### Template Object
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `id` | string | Unique template ID (auto-generated) |
+| `id` | string | Template ID. Supplied on create or auto-generated |
 | `name` | string | Human-readable name |
-| `description` | string? | Optional description |
+| `description` | string | Optional description |
 | `image` | string | Container image (e.g. `ubuntu:22.04`) |
-| `command` | string? | Override entrypoint (e.g. `/bin/bash`) |
+| `command` | string | Entrypoint command (a command list is joined with spaces) |
 | `env` | string[] | Environment variables as `KEY=VALUE` strings |
 | `host_path_mounts` | HostPathMount[] | Host directory mounts |
+| `workspace` | WorkspaceConfigOverride? | Per-sandbox `/workspace` PVC policy; omitted fields inherit global defaults |
 | `cpu_millicores` | integer | CPU limit in millicores (100–128000) |
-| `cpu_request` | integer? | CPU request in millicores (default: same as limit) |
+| `cpu_request` | integer? | CPU request in millicores (default: limit) |
 | `memory_mb` | integer | Memory limit in MB (128–131072) |
-| `memory_request` | integer? | Memory request in MB (default: same as limit) |
-| `ttl_seconds` | integer? | Default sandbox lifetime in seconds (60–86400) |
-| `lifecycle` | TemplateLifecycle? | Container lifecycle hooks applied to every sandbox created from this template |
-| `metadata` | object? | Arbitrary key-value metadata |
+| `memory_request` | integer? | Memory request in MB (default: limit) |
+| `ttl_seconds` | integer? | Default sandbox lifetime. `0` or omitted disables expiry; otherwise 60–86400 |
+| `lifecycle` | SandboxLifecycle? | Kubernetes lifecycle hooks applied to every sandbox |
+| `metadata` | object | Arbitrary string key-value metadata |
 | `created_at` | string | ISO 8601 creation timestamp |
 | `updated_at` | string | ISO 8601 last-updated timestamp |
 
-**HostPathMount object:**
+**HostPathMount object**
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -71,66 +117,74 @@ Templates define the resource blueprint for sandboxes (image, CPU, memory, env v
 | `container_path` | string | Mount path inside the container |
 | `read_only` | boolean | Whether the mount is read-only |
 
-**TemplateLifecycle object:**
+**WorkspaceConfigOverride object**
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `postStart.exec.command` | string[] | Command run by Kubernetes after container creation |
-| `preStop.exec.command` | string[] | Command run by Kubernetes before container termination |
-| `preStop.terminationGracePeriodSeconds` | integer? | Pod termination grace period for sandbox delete/release/TTL cleanup (1–300) |
+| `enabled` | boolean? | Create and mount a workspace PVC |
+| `mount_path` | string? | Absolute mount path (default `/workspace`) |
+| `size` | string? | PVC size (default `1Gi`) |
+| `storage_class` | string? | StorageClass (default from global workspace config) |
+
+**SandboxLifecycle object**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `postStart.exec.command` | string[] | Command run after container creation |
+| `preStop.exec.command` | string[] | Command run before container termination |
+| `preStop.terminationGracePeriodSeconds` | integer? | Termination grace period (1–300) |
+
+> With `ORCHESTRATOR__ENVD__ENABLED=true`, envd owns `postStart`; templates that also define `postStart` are rejected at sandbox creation.
 
 ---
 
 ### `POST /api/v1/templates`
 
-Create a new template.
+Create a template. Returns `201`.
 
 ```bash
 curl -X POST http://localhost:8080/api/v1/templates \
   -H "Content-Type: application/json" \
   -d '{
+    "id": "ubuntu",
     "name": "ubuntu-dev",
     "image": "ubuntu:22.04",
+    "command": "sleep infinity",
     "cpu_millicores": 1000,
     "memory_mb": 512,
     "env": ["TERM=xterm-256color", "LANG=en_US.UTF-8"],
-    "ttl_seconds": 3600,
-    "lifecycle": {
-      "postStart": {
-        "exec": { "command": ["/bin/sh", "-lc", "echo started"] }
-      },
-      "preStop": {
-        "exec": { "command": ["/bin/sh", "-lc", "echo stopping"] },
-        "terminationGracePeriodSeconds": 30
-      }
-    }
+    "workspace": { "enabled": true, "size": "10Gi" },
+    "ttl_seconds": 3600
   }'
 ```
 
-**Response `200`** — the created Template object.
+**Response `201`** — the created Template object.
 
 ---
 
 ### `GET /api/v1/templates`
 
-List all templates.
-
-**Query parameters:**
+**Query parameters**
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
+| `page` | integer? | Page number (default `1`) |
+| `page_size` | integer? | Page size (default `10`, max `100`) |
 | `name` | string? | Filter by name (substring match) |
 | `user_id` | string? | Filter by `metadata.user_id` |
 
-```bash
-curl "http://localhost:8080/api/v1/templates?name=ubuntu"
-```
-
 **Response `200`**
+
 ```json
 {
-  "templates": [ /* Template[] */ ],
-  "total": 3
+  "success": true,
+  "data": {
+    "templates": [ /* Template[] */ ],
+    "total": 3,
+    "page": 1,
+    "page_size": 10,
+    "total_pages": 1
+  }
 }
 ```
 
@@ -138,34 +192,28 @@ curl "http://localhost:8080/api/v1/templates?name=ubuntu"
 
 ### `GET /api/v1/templates/{template_id}`
 
-Get a single template by ID.
-
-**Response `200`** — Template object.  
-**Response `404`** — Template not found.
+Returns the Template object. `404` if missing.
 
 ---
 
 ### `PATCH /api/v1/templates/{template_id}`
 
-Update a template. All fields are optional — only provided fields are updated.
+Update any subset of template fields. Returns the updated Template object.
 
 ```bash
-curl -X PATCH http://localhost:8080/api/v1/templates/tpl-abc123 \
+curl -X PATCH http://localhost:8080/api/v1/templates/ubuntu \
   -H "Content-Type: application/json" \
   -d '{"memory_mb": 1024, "ttl_seconds": 7200}'
 ```
-
-**Response `200`** — Updated Template object.
 
 ---
 
 ### `DELETE /api/v1/templates/{template_id}`
 
-Delete a template. Also deletes any associated Pool configuration.
+Delete a template and its pool configuration. Existing sandboxes are not deleted.
 
-**Response `200`**
 ```json
-{ "status": "deleted", "id": "tpl-abc123" }
+{ "success": true, "message": "Template deleted successfully" }
 ```
 
 ---
@@ -176,25 +224,28 @@ Delete a template. Also deletes any associated Pool configuration.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `id` | string | Unique sandbox ID |
-| `name` | string | Display name (set at allocation time) |
-| `template_id` | string | ID of the template used |
-| `image` | string | Container image |
-| `cpu_millicores` | integer | CPU limit from template |
-| `memory_mb` | integer | Memory limit from template |
+| `id` | string | Unique sandbox ID (also the Deployment name) |
+| `name` | string | Display name set at allocation time |
+| `template_id` | string | Template used |
+| `image` | string | Container image from the template |
+| `cpu_millicores` | integer | CPU limit from the template |
+| `memory_mb` | integer | Memory limit from the template |
 | `status` | SandboxStatus | Current status |
-| `terminating` | boolean | Whether the pod is being deleted |
-| `pool_state` | PoolState | Pool membership state |
-| `workspace_path` | string | Working directory inside the container |
+| `terminating` | boolean | Whether the Deployment is being deleted |
+| `pool_state` | string | Pool membership state |
 | `metadata` | object | Key-value metadata set at creation |
-| `allocated_at` | string? | When the sandbox was allocated from a pool |
+| `allocated_at` | string? | When allocated from a pool |
 | `created_at` | string | ISO 8601 creation timestamp |
 | `updated_at` | string | ISO 8601 last-updated timestamp |
-| `ttl_seconds` | integer | Configured TTL |
+| `ttl_seconds` | integer | Configured TTL (`0` = no expiry) |
 | `expires_at` | string? | ISO 8601 expiry timestamp |
-| `time_remaining_seconds` | integer | Seconds until expiry (0 if no TTL) |
+| `time_remaining_seconds` | integer | Seconds until expiry |
+| `locked` | boolean | Business lock; blocks resume |
+| `workspace` | WorkspaceConfig? | Resolved workspace policy |
 
-**SandboxStatus values:** `created` · `running` · `stopped` · `exited` · `unknown` · `pooled` · `creating`
+**SandboxStatus values:** `created` · `creating` · `running` · `stopped` · `exited` · `unknown` · `pooled`
+
+`stopped` means the Deployment has been scaled to zero (suspended); the workspace PVC is retained.
 
 **PoolState values:** `none` · `creating` · `available` · `allocated` · `failed`
 
@@ -202,69 +253,50 @@ Delete a template. Also deletes any associated Pool configuration.
 
 ### Lifecycle
 
-#### `POST /api/v1/sandboxes/allocate`
+#### `POST /api/v1/sandboxes`
 
-Create or allocate a sandbox. If a warm pool exists for the template, an available sandbox is claimed immediately (zero wait). Otherwise a new sandbox is created and waits until the pod is ready.
+Create or allocate a sandbox. If an enabled warm pool exists for the template, an available sandbox is claimed immediately; otherwise a new sandbox is created and the request waits for the Pod to become ready.
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/sandboxes/allocate \
+curl -X POST http://localhost:8080/api/v1/sandboxes \
   -H "Content-Type: application/json" \
   -d '{
-    "template_id": "tpl-abc123",
+    "template_id": "ubuntu",
     "name": "my-sandbox",
-    "metadata": { "user_id": "user-xyz", "project": "demo" },
-    "ttl_seconds": 3600
+    "metadata": { "user_id": "user-xyz" },
+    "env": ["JOB_ID=1001"]
   }'
 ```
 
-**Request body:**
+**Request body**
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `template_id` | string | ✅ | Template to use |
 | `name` | string? | | Human-readable name |
-| `metadata` | object? | | Arbitrary key-value pairs (e.g. `user_id`) |
-| `ttl_seconds` | integer? | | Override template TTL |
+| `metadata` | object? | | Arbitrary key-value pairs |
+| `env` | string[]? | | Extra `KEY=VALUE` variables; rejected when a warm pool is enabled |
+| `workspace` | WorkspaceConfigOverride? | | Workspace override; rejected when a warm pool is enabled |
 
-**Response `200`** — Sandbox object (status `running` when returned).
-
----
-
-#### `POST /api/v1/sandboxes`
-
-Low-level sandbox creation (does not use pools). Prefer `/allocate` for application use.
-
-Same request body as `/allocate` plus:
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `pool_state` | string? | Internal pool state (default: `none`) |
-| `wait_ready` | boolean? | Wait for pod ready before returning (default: `true`) |
+**Response `201`** — Sandbox object.
 
 ---
 
 #### `GET /api/v1/sandboxes`
 
-List sandboxes.
-
-**Query parameters:**
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `template_id` | string? | Filter by template |
-| `status` | string? | Filter by status |
-| `pool_state` | string? | Filter by pool state |
-| `name` | string? | Filter by name (substring) |
-| `page` | integer? | Page number (default: 1) |
-| `page_size` | integer? | Page size (default: 50) |
+**Query parameters:** `page` (default `1`), `page_size` (default `20`), `status`, `name`, `template_id`, `pool_state`.
 
 **Response `200`**
+
 ```json
 {
-  "sandboxes": [ /* Sandbox[] */ ],
-  "total": 12,
-  "page": 1,
-  "page_size": 50
+  "success": true,
+  "data": {
+    "sandboxes": [ /* Sandbox[] */ ],
+    "total": 12,
+    "page": 1,
+    "page_size": 20
+  }
 }
 ```
 
@@ -272,110 +304,77 @@ List sandboxes.
 
 #### `POST /api/v1/sandboxes/query`
 
-Query sandboxes with metadata filters.
+Query with a JSON body:
 
-```bash
-curl -X POST http://localhost:8080/api/v1/sandboxes/query \
-  -H "Content-Type: application/json" \
-  -d '{
-    "metadata": { "user_id": "user-xyz" },
-    "status": "running"
-  }'
+```json
+{
+  "page": 1,
+  "page_size": 20,
+  "template_id": "ubuntu",
+  "status": "running",
+  "pool_state": "",
+  "name": "",
+  "metadata": { "user_id": "user-xyz" }
+}
 ```
+
+Returns the same shape as `GET /api/v1/sandboxes`.
 
 ---
 
 #### `GET /api/v1/sandboxes/{sandbox_id}`
 
-Get a single sandbox by ID.
+Returns a Sandbox object. `404` if missing.
+
+#### `GET /api/v1/sandboxes/{sandbox_id}/status`
+
+Returns the same Sandbox object.
 
 ---
 
 #### `PATCH /api/v1/sandboxes/{sandbox_id}`
 
-Update sandbox metadata or name.
+Update `name` or `metadata`.
+
+```json
+{ "name": "renamed", "metadata": { "user_id": "user-abc" } }
+```
 
 ---
 
 #### `DELETE /api/v1/sandboxes/{sandbox_id}`
 
-Delete/release a sandbox. Litterbox has no explicit stop/start/restart lifecycle for sandboxes; deletion is the only explicit shutdown path. If the template defines `preStop.terminationGracePeriodSeconds`, that value is used internally as the Kubernetes termination grace period.
+Permanently delete the sandbox, its Deployment, its workspace PVC and TTL schedule. To stop compute while keeping the workspace, use `suspend`.
 
----
-
-### Files & Exec
-
-#### `POST /api/v1/sandboxes/{sandbox_id}/exec`
-
-Execute a command inside a running sandbox.
-
-```bash
-curl -X POST http://localhost:8080/api/v1/sandboxes/sbx-abc/exec \
-  -H "Content-Type: application/json" \
-  -d '{"command": ["ls", "-la", "/workspace"], "timeout": 10}'
-```
-
-**Request body:**
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `command` | string[] | Command and arguments |
-| `timeout` | integer | Seconds to wait (default: 30) |
-
-**Response `200`**
 ```json
-{
-  "stdout": "total 4\ndrwxr-xr-x ...",
-  "stderr": "",
-  "exit_code": 0
-}
+{ "success": true, "message": "Sandbox deleted successfully" }
 ```
 
 ---
 
-#### `GET /api/v1/sandboxes/{sandbox_id}/files`
+#### `POST /api/v1/sandboxes/{sandbox_id}/suspend`
 
-List files in a directory inside the sandbox.
+Scale the Deployment to zero. The workspace PVC is retained. The TTL keeps counting down while the sandbox is suspended, so a manual suspend does not by itself prevent later TTL expiry.
 
-**Query parameters:** `path` — directory path (default: `/workspace`).
-
-**Response `200`**
 ```json
-{
-  "entries": [
-    { "name": "main.py", "type": "file", "size": 1024 },
-    { "name": "src", "type": "directory", "size": 0 }
-  ],
-  "path": "/workspace"
-}
+{ "success": true, "data": { /* Sandbox */ }, "message": "Sandbox suspended successfully" }
 ```
 
 ---
 
-#### `PUT /api/v1/sandboxes/{sandbox_id}/files`
+#### `POST /api/v1/sandboxes/{sandbox_id}/resume`
 
-Write a file inside the sandbox.
-
-**Request body:**
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `path` | string | Absolute path inside the container |
-| `content` | string | File content (UTF-8) |
+Scale the Deployment back up. If the sandbox was suspended by TTL expiry, `resume` re-arms the TTL from the stored `ttl-seconds` annotation. Returns `409` if the sandbox is locked.
 
 ---
 
-#### `DELETE /api/v1/sandboxes/{sandbox_id}/files`
+#### `POST /api/v1/sandboxes/{sandbox_id}/lock`
 
-Delete a file inside the sandbox.
+Set the business lock. A locked sandbox can still be queried, suspended and deleted, but `resume` is rejected.
 
-**Query parameters:** `path` — file path to delete.
+#### `POST /api/v1/sandboxes/{sandbox_id}/unlock`
 
----
-
-#### WebSocket: `ws://{host}/api/v1/sandboxes/{sandbox_id}/terminal`
-
-Open a WebSocket PTY terminal session. Send/receive raw terminal data. The connection is proxied to a `kubectl exec` session inside the sandbox pod.
+Clear the business lock.
 
 ---
 
@@ -383,77 +382,121 @@ Open a WebSocket PTY terminal session. Send/receive raw terminal data. The conne
 
 #### `POST /api/v1/sandboxes/{sandbox_id}/renew`
 
-Renew the sandbox TTL (extend its lifetime).
+Renew from now by `ttl` seconds.
 
-```bash
-curl -X POST http://localhost:8080/api/v1/sandboxes/sbx-abc/renew \
-  -H "Content-Type: application/json" \
-  -d '{"ttl": 3600}'
+```json
+{ "ttl": 3600 }
 ```
-
-**Request body:** `ttl` (integer) — new TTL in seconds from now.
-
----
 
 #### `PUT /api/v1/sandboxes/{sandbox_id}/ttl`
 
-Set an absolute TTL (seconds from now).
+Set the TTL explicitly.
 
----
+```json
+{ "ttl_seconds": 3600 }
+```
 
 #### `GET /api/v1/sandboxes/{sandbox_id}/ttl`
 
-Get current TTL info.
+```json
+{
+  "success": true,
+  "data": {
+    "ttl_seconds": 3600,
+    "expires_at": "2026-01-01T01:00:00Z",
+    "time_remaining": 3598,
+    "ttl_enabled": true
+  }
+}
+```
+
+When the TTL expires, the TTL loop **suspends** the sandbox (scale to zero, keep PVC) rather than deleting it.
+
+---
+
+### Data Plane (envd)
+
+Command execution, file operations and PTY streams use the E2B envd protocol (Connect RPC), not plain JSON REST. Every sandbox runs an envd process on port `49983` when `ORCHESTRATOR__ENVD__ENABLED=true`.
+
+Two routes reach it:
+
+| Route | Auth | Use |
+|---|---|---|
+| `49983-{sandbox_id}.{ORCHESTRATOR__E2B__DOMAIN}` (Host routing) | `X-API-Key` / `X-Access-Token` | Official E2B SDKs |
+| `/api/v1/sandboxes/{sandbox_id}/envd/{envd_path}` | Bearer token | Dashboard and diagnostics |
+
+The orchestrator proxies both to the sandbox Pod IP; neither exposes envd directly. Use an E2B SDK for anything beyond diagnostics. See [E2B Compatibility](../README.md#e2b-compatibility) and the [E2B API Guide](../orchestrator/docs/API.md).
+
+Example health probe through the path proxy:
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8080/api/v1/sandboxes/sbx-abc/envd/health
+```
 
 ---
 
 ### Service Exposes
 
-Expose a sandbox's internal port via a Kubernetes Service + Ingress.
+Expose a sandbox port through a Kubernetes Service, plus an Ingress for HTTP.
 
 #### `POST /api/v1/sandboxes/{sandbox_id}/exposes`
 
-Create an expose.
+The sandbox must be `running`.
 
 ```bash
 curl -X POST http://localhost:8080/api/v1/sandboxes/sbx-abc/exposes \
   -H "Content-Type: application/json" \
-  -d '{"port": 8888, "protocol": "http"}'
+  -d '{"name": "web", "protocol": "http", "internal_port": 8080, "path": "/"}'
 ```
 
-**Request body:**
+**Request body**
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `port` | integer | Container port to expose |
+| `name` | string? | Display name |
 | `protocol` | string | `http` or `tcp` |
-| `subdomain` | string? | Custom subdomain prefix |
+| `internal_port` | integer | Container port (1–65535) |
+| `domain` | string? | Custom HTTP host; defaults to `{port}-{sandbox_id}.{base_domain}` |
+| `path` | string? | HTTP path prefix (default `/`) |
 
-**Response `200`** — ServiceExpose object with `url` field.
+**Response `201`**
 
----
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Expose ID |
+| `sandbox_id` | string | Owning sandbox |
+| `name` | string | Display name |
+| `protocol` | string | `http` or `tcp` |
+| `internal_port` | integer | Container port |
+| `external_url` | string | Public URL (HTTP) |
+| `domain` | string | HTTP host |
+| `path` | string | HTTP path |
+| `external_ip` | string | Node IP (TCP) |
+| `external_port` | integer | NodePort (TCP) |
+| `service_name` | string | Kubernetes Service |
+| `ingress_name` | string | Kubernetes Ingress (HTTP) |
+| `status` | string | `pending` · `ready` · `failed` |
+| `message` | string | Status detail |
+| `created_at` / `updated_at` | string | Timestamps |
 
 #### `GET /api/v1/sandboxes/{sandbox_id}/exposes`
 
-List all exposes for a sandbox.
-
----
+Returns `{"success": true, "data": {"exposes": [...], "total": n}}`.
 
 #### `GET /api/v1/exposes/{expose_id}`
 
-Get a single expose.
-
----
+Returns one expose.
 
 #### `DELETE /api/v1/exposes/{expose_id}`
 
-Delete an expose (removes Service and Ingress).
+Removes the Service and Ingress.
 
 ---
 
 ## Pools
 
-Pools maintain a warm inventory of pre-created sandboxes for zero-latency allocation.
+Pools maintain a warm inventory of pre-created sandboxes for low-latency allocation.
 
 ### Pool Status Object
 
@@ -468,69 +511,62 @@ Pools maintain a warm inventory of pre-created sandboxes for zero-latency alloca
 | `creating` | integer | Currently creating |
 | `allocated` | integer | Allocated (in use) |
 | `failed` | integer | Failed creations |
-| `created_at` | string | Pool creation timestamp |
-| `updated_at` | string | Last updated timestamp |
+| `terminating` | integer | Sandboxes being deleted |
 
 ---
 
 ### `POST /api/v1/pools/{template_id}`
 
-Create a pool for a template.
+Create a pool. Returns `201` with a Pool Status object.
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/pools/tpl-abc123 \
+curl -X POST http://localhost:8080/api/v1/pools/ubuntu \
   -H "Content-Type: application/json" \
   -d '{"min_ready": 2, "target_ready": 5, "max_creating": 3}'
 ```
 
-**Request body:**
-
 | Field | Type | Description |
 |-------|------|-------------|
-| `min_ready` | integer | Minimum warm sandboxes to maintain |
-| `target_ready` | integer? | Target warm count (defaults to `min_ready`) |
-| `max_creating` | integer | Max concurrent sandbox creations |
-
----
+| `min_ready` | integer | Minimum warm sandboxes (1–50) |
+| `target_ready` | integer? | Target warm count (1–100, defaults to `min_ready`) |
+| `max_creating` | integer? | Max concurrent creations (1–20, default `5`) |
 
 ### `GET /api/v1/pools`
 
-List all pool statuses.
-
----
+Returns `{"success": true, "data": {"pools": [...], "total": n}}`.
 
 ### `GET /api/v1/pools/{template_id}`
 
-Get pool status for a specific template.
-
----
+Returns one Pool Status object.
 
 ### `PUT /api/v1/pools/{template_id}`
 
-Update pool configuration (triggers immediate reconcile).
-
----
+Update any of `min_ready`, `target_ready`, `max_creating`. Triggers reconciliation.
 
 ### `DELETE /api/v1/pools/{template_id}`
 
-Delete the pool. Non-allocated sandboxes are cleaned up; sandboxes currently in use (`ALLOCATED` state) are left running until they are deleted normally.
+Delete the pool. Warm, non-allocated sandboxes are cleaned up; allocated sandboxes keep running.
 
 ---
 
 ## Webhooks
 
-Register HTTP endpoints to receive sandbox lifecycle event notifications.
+Register HTTP endpoints to receive sandbox lifecycle events.
 
 ### Webhook Object
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `id` | string | Unique webhook ID |
-| `url` | string | Target URL for event delivery |
-| `events` | string[] | Events to subscribe to |
-| `secret` | string? | HMAC signing secret |
+| `name` | string | Display name |
 | `user_id` | string | Owner identifier |
-| `created_at` | string | Creation timestamp |
+| `url` | string | Delivery URL |
+| `token` | string | Optional bearer token sent to the receiver |
+| `template_ids` | string[] | Restrict to these templates (empty = all) |
+| `events` | string[] | Subscribed events |
+| `retry` | object | `{max_attempts, interval_ms, timeout_ms}` |
+| `enabled` | boolean | Whether delivery is active |
+| `created_at` / `updated_at` | string | Timestamps |
 
 **Event types:** `sandbox_started` · `sandbox_ready` · `sandbox_deleted`
 
@@ -538,76 +574,75 @@ Register HTTP endpoints to receive sandbox lifecycle event notifications.
 
 ```json
 {
-  "event": "sandbox_ready",
-  "sandbox": {
-    "id": "sbx-abc123",
-    "name": "my-sandbox",
-    "template_id": "tpl-ubuntu",
-    "image": "ubuntu:22.04",
-    "cpu_millicores": 1000,
-    "memory_mb": 512,
-    "status": "running",
-    "pool_state": "allocated",
-    "workspace_path": "/workspace",
-    "metadata": { "user_id": "user-xyz" },
-    "created_at": "2025-01-01T00:00:00Z",
-    "updated_at": "2025-01-01T00:00:05Z",
-    "ttl_seconds": 3600,
-    "expires_at": "2025-01-01T01:00:05Z",
-    "time_remaining_seconds": 3598
-  },
+  "event_id": "evt-abc123",
+  "event_type": "sandbox_ready",
+  "occurred_at": "2026-01-01T00:00:00Z",
+  "deletion_reason": "",
+  "sandbox": { /* Sandbox object */ },
   "template": { /* Template object */ },
-  "namespace": "default",
-  "pod_name": "sbx-abc123-xxxx",
-  "pod_ip": "10.244.0.5",
-  "node_name": "k3s-node-1"
+  "kubernetes": {
+    "namespace": "default",
+    "pod_name": "sbx-abc123-xxxx",
+    "pod_ip": "10.42.0.5",
+    "node_name": "k3s-node-1",
+    "container_name": "main"
+  }
 }
 ```
 
-For `sandbox_deleted`, the payload also includes `"deletion_reason": "ttl_expired" | "manual"`.
+For `sandbox_deleted`, `deletion_reason` may be `ttl_expired` or `manual`.
 
 ---
 
 ### `POST /api/v1/webhooks`
 
-Create a webhook.
+Returns `201`.
 
 ```bash
 curl -X POST http://localhost:8080/api/v1/webhooks \
   -H "Content-Type: application/json" \
   -d '{
+    "name": "runner",
+    "user_id": "user-xyz",
     "url": "https://your-server.com/hooks/litterbox",
     "events": ["sandbox_ready", "sandbox_deleted"],
-    "user_id": "user-xyz",
-    "secret": "your-signing-secret"
+    "template_ids": ["ubuntu"],
+    "retry": { "max_attempts": 5, "interval_ms": 200, "timeout_ms": 1000 }
   }'
 ```
 
----
-
 ### `GET /api/v1/webhooks`
 
-List webhooks.
-
-**Query parameters:** `user_id` — filter by owner.
-
----
+Optional `user_id` query parameter. Returns `data` as a Webhook array.
 
 ### `GET /api/v1/webhooks/{webhook_id}`
 
-Get a single webhook.
-
----
+Returns one Webhook object.
 
 ### `PATCH /api/v1/webhooks/{webhook_id}`
 
-Update a webhook (URL, events, secret).
-
----
+Update `name`, `url`, `token`, `template_ids`, `events`, `retry` or `enabled`.
 
 ### `DELETE /api/v1/webhooks/{webhook_id}`
 
-Delete a webhook.
+Delete the webhook.
+
+---
+
+## E2B Control Plane
+
+The `/e2b` routes accept the official E2B SDKs and return native E2B objects (no `ApiResponse` wrapper).
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/e2b/sandboxes` | Create a sandbox from a template |
+| `GET` | `/e2b/sandboxes/{id}` | Get sandbox state |
+| `POST` | `/e2b/sandboxes/{id}/connect` | Resume a paused sandbox and set timeout |
+| `POST` | `/e2b/sandboxes/{id}/pause` | Suspend (`memory: false` only) |
+| `POST` | `/e2b/sandboxes/{id}/timeout` | Update timeout |
+| `DELETE` | `/e2b/sandboxes/{id}` | Permanently delete |
+
+Auth is `X-API-Key` (falling back to the orchestrator bearer token when `ORCHESTRATOR__E2B__API_KEY` is empty). Supported and unsupported E2B features are listed in the [E2B API Guide](../orchestrator/docs/API.md).
 
 ---
 
@@ -615,44 +650,37 @@ Delete a webhook.
 
 ### `GET /metrics`
 
-Prometheus scrape endpoint. Returns metrics in the Prometheus text exposition format.
+Prometheus scrape endpoint.
 
-Key metrics exposed:
+| Metric | Type | Labels |
+|--------|------|--------|
+| `litterbox_sandbox_create_duration_seconds` | Histogram | `template_id`, `success`, `source` |
+| `litterbox_sandbox_create_total` | Counter | `template_id`, `success`, `source` |
 
-| Metric | Type | Description |
-|--------|------|-------------|
-| `sandbox_create_duration_seconds` | Histogram | End-to-end sandbox creation latency |
-| `sandbox_creates_total` | Counter | Total sandbox creation attempts |
-| `sandbox_create_errors_total` | Counter | Total failed creations |
-| `sandbox_pool_hits_total` | Counter | Pool allocation hits |
-
----
+`source` is `pool` or `direct`.
 
 ### `GET /api/v1/metrics/snapshot`
 
-Returns an in-memory 1-hour sliding window metrics snapshot as JSON.
+Returns the in-memory one-hour window as JSON, plus live sandbox counts.
 
-```bash
-curl http://localhost:8080/api/v1/metrics/snapshot | jq .
-```
-
-**Response `200`**
 ```json
 {
-  "window_hours": 1,
-  "total_creates": 42,
-  "success_rate": 0.976,
-  "latency_p50_ms": 380,
-  "latency_p95_ms": 12400,
-  "latency_p99_ms": 45000,
-  "pool_hit_rate": 0.714,
-  "by_template": {
-    "tpl-ubuntu": {
-      "total": 30,
-      "success": 29,
-      "p50_ms": 320,
-      "pool_hits": 22
-    }
+  "success": true,
+  "data": {
+    "window_seconds": 3600,
+    "total": 42,
+    "success": 41,
+    "fail": 1,
+    "success_rate": 0.9762,
+    "p50_seconds": 0.38,
+    "p90_seconds": 12.4,
+    "live": { "total": 12, "running": 8, "stopped": 3, "creating": 1 },
+    "by_template": {
+      "ubuntu": { "total": 30, "success": 29, "fail": 1, "success_rate": 0.9667, "p50": 0.32, "p90": 8.1 }
+    },
+    "timeline": [
+      { "minute_ago": 59, "count": 0, "success": 0, "fail": 0, "source_pool": 0, "source_direct": 0, "p50": null, "p90": null }
+    ]
   }
 }
 ```

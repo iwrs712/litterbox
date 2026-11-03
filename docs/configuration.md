@@ -15,6 +15,9 @@
 - [server](#server)
 - [kubernetes](#kubernetes)
 - [sandbox](#sandbox)
+- [workspace](#workspace)
+- [envd](#envd)
+- [e2b](#e2b)
 - [ttl](#ttl)
 - [webhook](#webhook)
 - [celery](#celery)
@@ -37,7 +40,7 @@ ORCHESTRATOR_ROLE=api
 
 | 角色 | 进程 | 说明 |
 |---|---|---|
-| `api` | `uvicorn` | REST API + WebSocket，需要 K8s + Redis 访问权限 |
+| `api` | `uvicorn` | REST API、E2B 控制面和 envd 代理，需要 K8s + Redis 访问权限 |
 | `worker` | `celery` + TTL 子进程 | 消费 `pool_reconcile` 和 `webhook_delivery` 队列，同时在后台运行 TTL 清理子进程 |
 
 > **注意**：`worker` 角色会在后台启动 TTL 子进程，再前台 exec celery。不需要单独部署 TTL 进程。
@@ -76,8 +79,8 @@ Kubernetes API 连接配置。
 |---|---|---|---|
 | `kubeconfig` | string | *空* | kubeconfig 文件路径。**为空时使用 in-cluster 模式**（读取 ServiceAccount token）。本地开发设为 `~/.kube/config` |
 | `namespace` | string | `"default"` | 沙箱资源（Deployment、Service、Ingress）创建的 namespace |
-| `runtime_class` | string | *空* | Pod 的 [runtimeClassName](https://kubernetes.io/docs/concepts/containers/runtime-class/)。设为 `"kata-cloud-hypervisor"` 可获得 VM 级隔离。为空使用集群默认 runtime |
-| `storage_class` | string | *空* | PVC 使用的 StorageClass |
+| `runtime_class` | string | `"kata-clh"` | Pod 的 [runtimeClassName](https://kubernetes.io/docs/concepts/containers/runtime-class/)。仅在集群中确实存在该 RuntimeClass 时生效；不存在时回退到集群默认 runtime |
+| `storage_class` | string | *空* | workspace 未单独配置 StorageClass 时的回退值 |
 | `image_pull_secret` | string | *空* | 拉取私有镜像的 `kubernetes.io/dockerconfigjson` Secret 名称。公开镜像留空 |
 
 **环境变量：**
@@ -85,8 +88,8 @@ Kubernetes API 连接配置。
 ```
 ORCHESTRATOR__KUBERNETES__KUBECONFIG=/path/to/kubeconfig
 ORCHESTRATOR__KUBERNETES__NAMESPACE=default
-ORCHESTRATOR__KUBERNETES__RUNTIME_CLASS=kata-cloud-hypervisor
-ORCHESTRATOR__KUBERNETES__STORAGE_CLASS=local-path
+ORCHESTRATOR__KUBERNETES__RUNTIME_CLASS=kata-clh
+ORCHESTRATOR__KUBERNETES__STORAGE_CLASS=litterbox-workspace-lvm
 ORCHESTRATOR__KUBERNETES__IMAGE_PULL_SECRET=harbor-pull-secret
 ```
 
@@ -94,7 +97,7 @@ ORCHESTRATOR__KUBERNETES__IMAGE_PULL_SECRET=harbor-pull-secret
 [kubernetes]
 kubeconfig        = ""
 namespace         = "default"
-runtime_class     = ""
+runtime_class     = "kata-clh"
 storage_class     = ""
 image_pull_secret = ""
 ```
@@ -109,7 +112,7 @@ image_pull_secret = ""
 
 | Key | 类型 | 默认值 | 说明 |
 |---|---|---|---|
-| `max_sandboxes` | integer | `1000` | 最大同时存在的沙箱数量，超出返回 `429` |
+| `max_sandboxes` | integer | `1000` | 沙箱数量上限配置。当前用于限制 envd Pod IP 缓存大小，未在创建路径强制拒绝 |
 | `base_domain` | string | `"runlet.cn"` | HTTP 暴露的通配符域名。每个沙箱的暴露端口路由为 `<sandbox-id>.<base_domain>`。需要配置 `*.<base_domain>` 的 DNS 记录指向 Ingress Controller |
 
 **环境变量：**
@@ -124,6 +127,109 @@ ORCHESTRATOR__SANDBOX__BASE_DOMAIN=sandbox.example.com
 max_sandboxes = 1000
 base_domain   = "runlet.cn"
 ```
+
+---
+
+## [workspace]
+
+每个 Sandbox 的 `/workspace` 持久卷配置。Template 或创建请求中的 `workspace` 字段可以按沙箱覆盖这些值。
+
+| Key | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `enabled` | boolean | `true` | 是否创建并挂载 workspace PVC |
+| `mount_path` | string | `"/workspace"` | 容器内挂载路径，必须是绝对路径 |
+| `default_size` | string | `"1Gi"` | 未指定大小时的 PVC 容量 |
+| `storage_class` | string | `"litterbox-workspace-lvm"` | PVC 使用的 StorageClass；为空时回退到 `kubernetes.storage_class` |
+
+**环境变量：**
+
+```
+ORCHESTRATOR__WORKSPACE__ENABLED=true
+ORCHESTRATOR__WORKSPACE__MOUNT_PATH=/workspace
+ORCHESTRATOR__WORKSPACE__DEFAULT_SIZE=1Gi
+ORCHESTRATOR__WORKSPACE__STORAGE_CLASS=litterbox-workspace-lvm
+```
+
+```toml
+[workspace]
+enabled       = true
+mount_path    = "/workspace"
+default_size  = "1Gi"
+storage_class = "litterbox-workspace-lvm"
+```
+
+> PVC 在暂停/恢复后保留；只有永久删除 Sandbox 时才会删除。StorageClass 需要提前安装，参见 [orchestrator/k8s/storage](../orchestrator/k8s/storage/README.md)。
+
+---
+
+## [envd]
+
+envd（`sandbox-agent`）数据面配置。启用后，每个 Sandbox 主容器会通过 `postStart` 启动 envd，orchestrator 通过它提供命令执行、文件读写和 PTY。
+
+| Key | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `enabled` | boolean | `false` | 是否向 Sandbox 注入并启动 envd |
+| `version` | string | `"0.1.0"` | envd 版本，同时作为节点选择标签 `litterbox.io/envd-version` |
+| `host_binary_path` | string | `"/opt/litterbox/bin/sandbox-agent"` | 节点上的二进制路径，由 installer DaemonSet 写入 |
+| `container_binary_path` | string | `"/opt/litterbox/envd/sandbox-agent"` | 容器内的只读挂载路径 |
+| `port` | integer | `49983` | envd 监听端口 |
+| `connect_timeout_seconds` | float | `3.0` | 代理连接 envd 的超时 |
+| `pod_ip_cache_ttl_seconds` | float | `5.0` | Pod IP 缓存时间；`0` 表示不缓存 |
+
+**环境变量：**
+
+```
+ORCHESTRATOR__ENVD__ENABLED=true
+ORCHESTRATOR__ENVD__VERSION=0.1.0
+ORCHESTRATOR__ENVD__HOST_BINARY_PATH=/opt/litterbox/bin/sandbox-agent
+ORCHESTRATOR__ENVD__CONTAINER_BINARY_PATH=/opt/litterbox/envd/sandbox-agent
+ORCHESTRATOR__ENVD__PORT=49983
+```
+
+```toml
+[envd]
+enabled                 = true
+version                 = "0.1.0"
+host_binary_path        = "/opt/litterbox/bin/sandbox-agent"
+container_binary_path   = "/opt/litterbox/envd/sandbox-agent"
+port                    = 49983
+connect_timeout_seconds = 3.0
+pod_ip_cache_ttl_seconds = 5.0
+```
+
+> 启用前必须先在 Kata 节点上安装 envd，参见 [orchestrator/k8s/envd](../orchestrator/k8s/envd/README.md)。节点缺少对应版本标签时，新 Sandbox 会保持 Pending。
+
+---
+
+## [e2b]
+
+E2B 兼容控制面配置。启用后，官方 E2B SDK 可以访问 `/e2b/sandboxes` 和 `49983-{sandbox_id}.{domain}` 数据面。
+
+| Key | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `enabled` | boolean | `true` | 是否启用 `/e2b` 控制面和通配域名路由 |
+| `api_key` | string | `""` | E2B `X-API-Key`；为空时接受 `auth.bearer_token` |
+| `domain` | string | `"sandbox.runlet.cn"` | 数据面通配域名。需要 `*.{domain}` 的 DNS 和 TLS 指向 orchestrator |
+| `envd_version` | string | `"0.1.0"` | 返回给 SDK 的 envd 版本 |
+
+**环境变量：**
+
+```
+ORCHESTRATOR__E2B__ENABLED=true
+ORCHESTRATOR__E2B__API_KEY=replace-with-e2b-key
+ORCHESTRATOR__E2B__DOMAIN=sandbox.example.com
+ORCHESTRATOR__E2B__ENVD_VERSION=0.1.0
+```
+
+```toml
+[e2b]
+enabled      = true
+api_key      = ""
+domain       = "sandbox.runlet.cn"
+envd_version = "0.1.0"
+```
+
+> 完整 SDK 用法与支持范围见 [orchestrator/docs/API.md](../orchestrator/docs/API.md)。
 
 ---
 
@@ -228,7 +334,7 @@ API 鉴权配置（可选）。
 
 | Key | 类型 | 默认值 | 说明 |
 |---|---|---|---|
-| `bearer_token` | string | `""` | API Bearer Token。为空表示不启用鉴权；非空时要求客户端携带 Bearer Token 访问 `/api/v1/*`，WebSocket 端点也会校验 |
+| `bearer_token` | string | `""` | 私有 API 的 Bearer Token。为空表示不启用鉴权；非空时要求访问 `/api/v1/*` 的客户端携带 `Authorization: Bearer <token>` |
 
 **环境变量：**
 
@@ -241,7 +347,7 @@ ORCHESTRATOR__AUTH__BEARER_TOKEN=replace-with-strong-token
 bearer_token = ""
 ```
 
-> WebSocket 浏览器客户端通常无法设置自定义 `Authorization` header，可通过查询参数传递：`?token=<token>`。
+> E2B 路由使用 `X-API-Key`（或 `X-Access-Token` / Bearer）。`e2b.api_key` 为空时回退使用这里的 `bearer_token`。
 
 ---
 
@@ -296,13 +402,29 @@ port = 8080
 [kubernetes]
 kubeconfig        = ""                          # in-cluster 认证
 namespace         = "litterbox-sandboxes"
-runtime_class     = "kata-cloud-hypervisor"     # VM 级隔离
+runtime_class     = "kata-clh"                  # VM 级隔离（不存在时回退）
 storage_class     = "ceph-rbd"
 image_pull_secret = "harbor-pull-secret"
 
 [sandbox]
 max_sandboxes = 5000
 base_domain   = "sandbox.example.com"
+
+[workspace]
+enabled       = true
+mount_path    = "/workspace"
+default_size  = "1Gi"
+storage_class = "litterbox-workspace-lvm"
+
+[envd]
+enabled = true
+version = "0.1.0"
+
+[e2b]
+enabled      = true
+api_key      = ""
+domain       = "sandbox.example.com"
+envd_version = "0.1.0"
 
 [ttl]
 default_ttl_seconds          = 1800
@@ -339,9 +461,24 @@ bearer_token = "replace-with-strong-token"
 | `ORCHESTRATOR__SERVER__PORT` | `server.port` | `8080` |
 | `ORCHESTRATOR__KUBERNETES__KUBECONFIG` | `kubernetes.kubeconfig` | *空* |
 | `ORCHESTRATOR__KUBERNETES__NAMESPACE` | `kubernetes.namespace` | `default` |
-| `ORCHESTRATOR__KUBERNETES__RUNTIME_CLASS` | `kubernetes.runtime_class` | *空* |
+| `ORCHESTRATOR__KUBERNETES__RUNTIME_CLASS` | `kubernetes.runtime_class` | `kata-clh` |
 | `ORCHESTRATOR__KUBERNETES__STORAGE_CLASS` | `kubernetes.storage_class` | *空* |
 | `ORCHESTRATOR__KUBERNETES__IMAGE_PULL_SECRET` | `kubernetes.image_pull_secret` | *空* |
+| `ORCHESTRATOR__WORKSPACE__ENABLED` | `workspace.enabled` | `true` |
+| `ORCHESTRATOR__WORKSPACE__MOUNT_PATH` | `workspace.mount_path` | `/workspace` |
+| `ORCHESTRATOR__WORKSPACE__DEFAULT_SIZE` | `workspace.default_size` | `1Gi` |
+| `ORCHESTRATOR__WORKSPACE__STORAGE_CLASS` | `workspace.storage_class` | `litterbox-workspace-lvm` |
+| `ORCHESTRATOR__ENVD__ENABLED` | `envd.enabled` | `false` |
+| `ORCHESTRATOR__ENVD__VERSION` | `envd.version` | `0.1.0` |
+| `ORCHESTRATOR__ENVD__HOST_BINARY_PATH` | `envd.host_binary_path` | `/opt/litterbox/bin/sandbox-agent` |
+| `ORCHESTRATOR__ENVD__CONTAINER_BINARY_PATH` | `envd.container_binary_path` | `/opt/litterbox/envd/sandbox-agent` |
+| `ORCHESTRATOR__ENVD__PORT` | `envd.port` | `49983` |
+| `ORCHESTRATOR__ENVD__CONNECT_TIMEOUT_SECONDS` | `envd.connect_timeout_seconds` | `3.0` |
+| `ORCHESTRATOR__ENVD__POD_IP_CACHE_TTL_SECONDS` | `envd.pod_ip_cache_ttl_seconds` | `5.0` |
+| `ORCHESTRATOR__E2B__ENABLED` | `e2b.enabled` | `true` |
+| `ORCHESTRATOR__E2B__API_KEY` | `e2b.api_key` | `""` |
+| `ORCHESTRATOR__E2B__DOMAIN` | `e2b.domain` | `sandbox.runlet.cn` |
+| `ORCHESTRATOR__E2B__ENVD_VERSION` | `e2b.envd_version` | `0.1.0` |
 | `ORCHESTRATOR__SANDBOX__MAX_SANDBOXES` | `sandbox.max_sandboxes` | `1000` |
 | `ORCHESTRATOR__SANDBOX__BASE_DOMAIN` | `sandbox.base_domain` | `runlet.cn` |
 | `ORCHESTRATOR__TTL__DEFAULT_TTL_SECONDS` | `ttl.default_ttl_seconds` | `1800` |

@@ -10,15 +10,15 @@ At a high level, the service manages five things:
 2. Sandbox lifecycle on Kubernetes
 3. Warm pool management for pre-created sandboxes
 4. Webhook delivery for sandbox events
-5. In-sandbox workspace access, terminal sessions, and file operations
+5. In-sandbox command, file and PTY access through the envd data plane
 
 The codebase is intentionally small and mostly layered:
 
-- `main.py` is the HTTP/WebSocket transport layer
+- `main.py` builds the FastAPI app, middleware and router wiring; `routes/` holds the HTTP transports
 - `container.py` wires concrete implementations together
-- `services/` contains business orchestration
+- `services/` contains business orchestration, plus the envd proxy and E2B adapter
 - `infra/` wraps Kubernetes and Redis-backed persistence primitives
-- `domain/models.py` defines the API and internal data contracts
+- `domain/models.py` defines the API and internal data contracts; `domain/e2b_models.py` defines the E2B wire format
 
 ## Runtime Topology
 
@@ -26,20 +26,21 @@ The project runs in two primary process roles plus one helper loop:
 
 - `api`: FastAPI + Uvicorn
 - `worker`: Celery worker for pool reconciliation and webhook delivery
-- `ttl`: a long-running polling loop that deletes expired sandboxes
+- `ttl`: a long-running polling loop that suspends expired sandboxes
 
 In Docker Compose, the `worker` container starts both the Celery worker and the TTL worker subprocess. In local development they can also be run separately.
 
 ```mermaid
 flowchart LR
-    Client["Client / Frontend"] --> API["FastAPI API"]
-    API --> Services["Service Layer"]
+    Client["Dashboard / API clients / E2B SDK"] --> API["FastAPI API"]
+    API --> Auth["Auth + E2B host router"]
+    Auth --> Services["Service Layer"]
+    Auth --> Proxy["envd Proxy"]
     Services --> K8s["Kubernetes API"]
     Services --> Redis["Redis"]
     Services --> CM["ConfigMap-backed metadata"]
-    Services --> Deploy["Deployments / Pods / Services / Ingresses"]
-    API --> WS["Terminal / ACP WebSockets"]
-    WS --> K8s
+    Services --> Deploy["Deployments / PVCs / Pods / Services / Ingresses"]
+    Proxy --> Pods["Sandbox Pod :49983 (envd)"]
     Services --> Celery["Celery Tasks"]
     Celery --> Worker["Celery Worker"]
     Worker --> Services
@@ -64,11 +65,11 @@ The orchestrator does not use a relational database. Persistent control-plane da
 
 ### 1. Transport Layer
 
-`src/orchestrator/main.py` exposes:
+`src/orchestrator/main.py` builds the app and `src/orchestrator/routes/` exposes:
 
-- REST endpoints for templates, sandboxes, pools, exposes, webhooks, TTL, and metrics
-- WebSocket endpoints for interactive shell access and ACP proxying
-- process-local FastAPI lifespan bootstrapping
+- REST endpoints for templates, sandboxes, pools, exposes, webhooks, TTL, metrics and the E2B control plane
+- the envd HTTP proxy, both path-based and via E2B wildcard host routing
+- bearer-token and E2B `X-API-Key` authentication middleware
 
 This layer is thin by design. It mainly:
 
@@ -84,6 +85,7 @@ This layer is thin by design. It mainly:
 - three ConfigMap repositories: template, pool, webhook
 - one Redis-backed `TTLQueueRepository`
 - services built on top of those primitives
+- the envd proxy and the E2B control-plane adapter
 
 This file is the single composition root for both the API process and worker processes.
 
@@ -91,13 +93,12 @@ This file is the single composition root for both the API process and worker pro
 
 `src/orchestrator/domain/models.py` defines the contracts for:
 
-- template CRUD
+- template CRUD, including workspace policy
 - pool configuration and status
-- sandbox state and list/query responses
+- sandbox state and list/query responses, including workspace and lock state
 - expose records
 - webhook payloads
-- workspace file/exec operations
-- generic API envelope responses
+- workspace configuration and envd request/response contracts
 
 The code uses the same Pydantic models for both API IO and most service boundaries, so the domain file is the canonical schema reference.
 
@@ -116,9 +117,11 @@ Owns the lifecycle of sandbox deployments:
 
 - build deployment specs from templates
 - create/read/list/update/delete sandboxes
+- create the workspace PVC before the Deployment and delete it on permanent delete
 - apply template lifecycle hooks during create/delete
 - map Kubernetes state to `SandboxStatus`
 - manage TTL annotations and Redis TTL scheduling
+- suspend (scale to zero), resume and lock/unlock sandboxes
 - dispatch sandbox lifecycle webhooks
 
 This is the central domain service in the project.
@@ -151,25 +154,33 @@ Creates per-sandbox network exposure resources:
 - selects subscribed hooks for an event
 - submits Celery jobs for asynchronous delivery
 
-#### `WorkspaceService`
+#### `EnvdProxyService`
 
-Provides a filesystem and command API into the running sandbox:
+Streams authenticated envd traffic to the sandbox Pod IP:
 
-- exec arbitrary commands
-- read files
-- list directories
-- build directory trees
-- write files/directories
-- delete files/directories
+- resolves the ready Pod IP, cached briefly and invalidated on failure
+- filters hop-by-hop and auth headers
+- retries safe requests once after refreshing the Pod IP
+- streams request and response bodies without buffering
 
-This service is implemented by shelling into the sandbox container through Kubernetes exec sessions.
+Both the path-based route and the E2B wildcard host route end here.
+
+#### `E2BControlPlaneService`
+
+Adapts native sandbox and pool operations to the E2B wire format:
+
+- create maps `templateID` directly to a Litterbox template ID
+- connect resumes a suspended sandbox
+- pause maps to suspend; only `keep_memory=False` is supported
+- timeout maps to a TTL update
+- kill permanently deletes the sandbox and its workspace PVC
 
 #### `TTLWorker`
 
 - polls Redis for expired TTL entries
-- asks `SandboxService` to delete the sandbox if the TTL token still matches
+- asks `SandboxService` to suspend the sandbox if the TTL token still matches
 
-The token check is important because TTL renewal rotates tokens and invalidates stale scheduled entries.
+The token check is important because TTL renewal rotates tokens and invalidates stale scheduled entries. Expiry suspends (scale to zero) rather than deletes, so the workspace PVC survives.
 
 ### 5. Infrastructure Layer
 
@@ -180,7 +191,8 @@ Encapsulates direct Kubernetes API usage:
 - ConfigMap CRUD
 - Deployment CRUD/patch/scale/list
 - Pod listing, deletion, readiness polling
-- exec/shell/ACP streams
+- ready Pod IP lookup for the envd proxy
+- PersistentVolumeClaim create/delete
 - Service and Ingress CRUD
 - node inspection for TCP exposure IP selection
 - optional runtime class and image pull secret detection
@@ -228,6 +240,8 @@ The project spreads state across Kubernetes and Redis:
   per-expose service objects
 - `Ingress`
   HTTP exposure routing
+
+Sandbox Pods also mount the node-local envd binary from `/opt/litterbox/bin/sandbox-agent` as a read-only `hostPath`. `NetworkPolicy` objects that restrict sandbox ingress/egress are installed separately from `k8s/networkpolicy/`, not created by the orchestrator.
 
 Most sandbox metadata is stored in deployment labels and annotations, not in an external database.
 
@@ -320,10 +334,10 @@ sandbox created or TTL updated
 -> TTL worker pops due entry
 -> SandboxService.delete_if_ttl_due()
 -> compare ttl token
--> delete only if token still current and expiry actually passed
+-> suspend only if token still current and expiry actually passed
 ```
 
-This prevents old TTL events from deleting a sandbox after a renewal.
+This prevents old TTL events from suspending a sandbox after a renewal. Suspension scales the Deployment to zero; the workspace PVC and an annotation recording the suspended TTL are retained so `resume` can re-arm it.
 
 ### Webhook Delivery
 
@@ -342,29 +356,44 @@ Webhook events currently supported:
 - `sandbox_ready`
 - `sandbox_deleted`
 
+### Suspend And Resume
+
+```text
+POST /sandboxes/{id}/suspend
+-> scale Deployment to 0
+-> keep workspace PVC (manual suspend leaves TTL running)
+
+POST /sandboxes/{id}/resume
+-> reject if business-locked
+-> scale Deployment back to 1
+-> if suspended by TTL expiry, re-arm TTL from the stored ttl-seconds annotation
+```
+
+TTL expiry uses the same suspension path but also clears the TTL schedule and records `litterbox.io/ttl-suspended-at`, which is what `resume` re-arms. The E2B facade maps `pause(keep_memory=False)` to suspend and `connect` to resume.
+
 ### Workspace And Terminal Access
 
-There are two access modes:
+There is one access mode: the envd data plane.
 
-- REST file/exec API via `WorkspaceService`
-- interactive WebSockets for `/terminal` and `/acp`
-
-`WorkspaceService` works by generating shell scripts and running them through Kubernetes exec. It uses a stderr exit marker to recover the true command exit code even though the exec API itself mainly provides stdout/stderr streams.
+- commands, file operations and PTY streams are served by `sandbox-agent` (envd) inside the main container on port `49983`
+- the orchestrator authenticates and proxies traffic, either path-based at `/api/v1/sandboxes/{id}/envd/*` or via E2B host routing at `49983-{sandbox-id}.{domain}`
+- the dashboard uses the same path-based proxy with its bearer token
+- `/workspace` is a per-sandbox PVC, so files survive suspend/resume and disappear only on permanent delete
 
 ## API Surface Summary
 
 Main resource groups:
 
 - `/api/v1/templates`
-- `/api/v1/sandboxes`
+- `/api/v1/sandboxes` (including `suspend`, `resume`, `lock`, `unlock`, TTL and `envd` routes)
 - `/api/v1/pools`
 - `/api/v1/exposes`
 - `/api/v1/webhooks`
 - `/api/v1/metrics/snapshot`
-- `/api/v1/sandboxes/{id}/terminal`
-- `/api/v1/sandboxes/{id}/acp`
+- `/e2b/sandboxes` (E2B-compatible control plane)
+- `/metrics` (Prometheus)
 
-The HTTP response contract is mostly wrapped in a generic `ApiResponse { success, message, data, error }`.
+Private API responses are wrapped in `ApiResponse { success, message, data, error }`. E2B routes return native E2B objects instead.
 
 ## Configuration Model
 
@@ -382,16 +411,21 @@ Defined config groups:
 - `server`
 - `kubernetes`
 - `sandbox`
+- `workspace`
+- `envd`
+- `e2b`
 - `ttl`
 - `webhook`
 - `celery`
+- `auth`
 
 Notable behavior:
 
 - relative `kubeconfig` paths are resolved against the repository root
 - if no kubeconfig is configured, the gateway tries in-cluster config first
-- runtime class is used only if it actually exists in the cluster
+- runtime class defaults to `kata-clh` and is used only if it actually exists in the cluster
 - image pull secret is used only if it exists in the namespace
+- workspace storage class falls back to `kubernetes.storage_class` when `workspace.storage_class` is unset
 
 ## Observability
 
@@ -404,20 +438,22 @@ Two metric surfaces exist:
 
 The metrics implementation tracks:
 
-- sandbox create duration histogram
-- sandbox create totals
+- `litterbox_sandbox_create_duration_seconds` histogram
+- `litterbox_sandbox_create_total` counter
 - in-memory one-hour create event window
 - per-template stats
-- last-hour minute buckets
+- 60 one-minute timeline buckets
 - live running/stopped/creating counts injected at request time
 
 ## Testing Strategy
 
 The project currently has:
 
-- focused unit tests for Kubernetes exec client isolation
+- focused unit tests for sandbox lifecycle, suspension, env override rules and workspace PVC provisioning
+- focused unit tests for envd injection, the envd proxy and E2B host routing
+- focused unit tests for the E2B control plane and API bearer auth
 - focused unit tests for webhook logging and auth masking
-- a broad integration test that exercises the FastAPI app, Celery workers, TTL worker, pool flows, file APIs, webhooks, exposes, metrics, and terminal websocket behavior
+- a broad integration test that exercises the FastAPI app, Celery workers, TTL worker, pool flows, webhooks, exposes, metrics and envd proxy behavior
 
 The integration test uses real subprocesses for Celery and the TTL worker, so it validates the orchestration shape rather than only pure functions.
 
@@ -444,26 +480,32 @@ That keeps the coordination story operationally simple.
 
 These are visible in the current code and matter for maintainers:
 
-- `sandbox.max_sandboxes`, `ttl.min_ttl_seconds`, `ttl.max_ttl_seconds`, and `kubernetes.storage_class` are configured but not meaningfully enforced/used in service logic today.
+- `sandbox.max_sandboxes` and `ttl.min_ttl_seconds` / `ttl.max_ttl_seconds` are configured but not meaningfully enforced; template TTL validation hardcodes 60–86400.
 - API error handling is mostly broad `except Exception` -> `500`, which keeps handlers short but loses structured failure typing.
 - The service stores significant operational state in labels/annotations; changing annotation keys is therefore a migration concern.
 - Pool reconciliation depends on Redis locks and periodic task delivery rather than a stronger transactional model.
-- Sandbox file and process traffic is served by the E2B-compatible envd process in the main container. The orchestrator authenticates and transparently proxies it through `/api/v1/sandboxes/{id}/envd/*`; it does not use Kubernetes Exec.
+- Sandbox file and process traffic is served by the E2B-compatible envd process in the main container. The orchestrator authenticates and transparently proxies it through `/api/v1/sandboxes/{id}/envd/*` and E2B host routing; it does not use Kubernetes Exec.
 
 ## File Map
 
 - `src/orchestrator/main.py`
-  HTTP entrypoints
+  FastAPI app, middleware and router wiring
+- `src/orchestrator/routes/`
+  HTTP transports for templates, sandboxes, pools, exposes, webhooks, metrics, envd and E2B
 - `src/orchestrator/container.py`
   dependency graph construction
 - `src/orchestrator/config.py`
   config loading and environment overrides
 - `src/orchestrator/domain/models.py`
   schema and response models
+- `src/orchestrator/domain/e2b_models.py`
+  E2B wire-format models
 - `src/orchestrator/services/sandboxes.py`
   sandbox lifecycle orchestration
 - `src/orchestrator/services/pools.py`
   warm pool allocation and reconciliation
+- `src/orchestrator/services/e2b.py`
+  E2B control-plane adapter
 - `src/orchestrator/services/envd_proxy.py`
   authenticated streaming proxy to a ready sandbox envd
 - `src/orchestrator/services/webhooks.py`
@@ -489,8 +531,9 @@ These are visible in the current code and matter for maintainers:
 
 If you need to reason about the system quickly, use this order:
 
-1. `main.py` tells you the public surface.
+1. `main.py` and `routes/` tell you the public surface.
 2. `container.py` tells you what concrete objects exist.
 3. `services/sandboxes.py` and `services/pools.py` tell you the main lifecycle rules.
-4. `infra/kubernetes.py` tells you what actually happens in the cluster.
-5. `tests/integration/test_api.py` shows the end-to-end contract the code is expected to preserve.
+4. `services/envd_proxy.py` and `services/e2b.py` tell you how the data plane and E2B facade work.
+5. `infra/kubernetes.py` tells you what actually happens in the cluster.
+6. `tests/integration/test_api.py` shows the end-to-end contract the code is expected to preserve.
