@@ -1,9 +1,9 @@
 # 本地一键启动：docker compose up
 #
 # 启动三个服务：
-#   redis   — Celery broker + TTL 队列
+#   redis   — Celery broker
 #   api     — FastAPI / uvicorn，监听 :8080
-#   worker  — Celery worker（pool_reconcile + webhook_delivery）+ TTL 扫描子进程
+#   worker  — Celery worker（webhook_delivery）
 #
 # 前提：
 #   - 本地有 kubeconfig，默认读 ~/.kube/config
@@ -75,7 +75,7 @@ services:
       retries: 3
     restart: unless-stopped
 
-  # ── Worker（Celery + TTL 子进程）────────────────────────────────────────────
+  # ── Worker（Celery）──────────────────────────────────────────────────────────
   worker:
     build: *build
     environment:

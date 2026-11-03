@@ -17,14 +17,27 @@ rules:
       - get
       - list
       - watch
+      - create
+      - update
+      - patch
+      - delete
   - apiGroups:
       - litterbox.io
     resources:
       - sandboxes/status
+      - sandboxpools/status
     verbs:
       - get
       - update
       - patch
+  - apiGroups:
+      - litterbox.io
+    resources:
+      - sandboxpools
+    verbs:
+      - get
+      - list
+      - watch
   - apiGroups:
       - ""
     resources:
@@ -81,6 +94,8 @@ rules:
     resources:
       - sandboxes
       - sandboxes/status
+      - sandboxpools
+      - sandboxpools/status
     verbs:
       - get
       - list

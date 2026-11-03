@@ -67,6 +67,32 @@ class SandboxCRDGateway:
             body,
         )
 
+    def patch_json(self, name: str, operations: list[dict[str, Any]]) -> dict[str, Any]:
+        # Newer generated clients hard-code merge-patch for this endpoint, so
+        # call the client directly to send a real JSON Patch.
+        return self.api.api_client.call_api(
+            f"/apis/{self.group}/{self.version}/namespaces/{self.namespace}"
+            f"/{self.plural}/{name}",
+            "PATCH",
+            {
+                "group": self.group,
+                "version": self.version,
+                "namespace": self.namespace,
+                "plural": self.plural,
+                "name": name,
+            },
+            [],
+            {
+                "Accept": "application/json",
+                "Content-Type": "application/json-patch+json",
+            },
+            body=operations,
+            auth_settings=["BearerToken"],
+            response_type="object",
+            _return_http_data_only=True,
+            _preload_content=True,
+        )
+
     def update_status(self, name: str, status: dict[str, Any]) -> dict[str, Any]:
         return self.api.patch_namespaced_custom_object_status(
             self.group,

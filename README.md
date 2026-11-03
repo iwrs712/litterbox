@@ -73,8 +73,8 @@ flowchart LR
         Proxy["envd proxy"]
     end
 
-    Controller["sandbox-controller"]
-    Redis[("Redis\nCelery · pool locks")]
+    Controller["sandbox-controller\nSandbox + SandboxPool"]
+    Redis[("Redis\nCelery · webhooks")]
 
     subgraph Cluster["Kubernetes"]
         Sandbox["Sandbox Pod\nmain + envd + /workspace PVC"]
@@ -87,7 +87,7 @@ flowchart LR
     Sdk --> E2B
     Sdk -->|"envd"| Proxy
     Dashboard -->|"envd"| Proxy
-    Rest -->|"Sandbox CRs"| Controller
+    Rest -->|"Sandbox + SandboxPool CRs"| Controller
     Controller -->|"Pod + PVC"| Sandbox
     E2B --> Rest
     Orchestrator <--> Redis
@@ -97,7 +97,7 @@ flowchart LR
 ```
 
 - **Control plane.** `/api/v1` manages templates, pools, webhooks, exposes and sandbox lifecycle. `/e2b` adapts the same services to the E2B SDK. Template, pool and webhook metadata live in ConfigMaps.
-- **Sandbox lifecycle.** The API writes `Sandbox` custom resources; the controller owns Pods and PVCs, publishes `status.phase`, handles TTL expiry, and repairs deleted Pods. REST and E2B clients never talk to Kubernetes workloads directly.
+- **Sandbox lifecycle.** The API writes `Sandbox` and `SandboxPool` custom resources; the controller owns Pods and PVCs, publishes `status.phase`, handles TTL expiry, repairs deleted Pods, and maintains warm-pool supply. REST and E2B clients never talk to Kubernetes workloads directly. Warm-pool claims use a `resourceVersion` JSON Patch instead of a global lock.
 - **Data plane.** When enabled, each sandbox runs an envd process on port `49983`. The orchestrator proxies authenticated traffic to the Pod, either at `/api/v1/sandboxes/{id}/envd/*` or through E2B host routing.
 - **Isolation.** Sandboxes use a Kata RuntimeClass, a per-sandbox `/workspace` PVC, and optionally a NetworkPolicy allowlist for ingress and egress.
 

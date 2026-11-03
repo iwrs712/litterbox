@@ -48,21 +48,22 @@ uvicorn orchestrator.main:app --reload --port 8080
 # Interactive docs: http://localhost:8080/docs
 ```
 
-**Celery worker** (pool reconcile + webhook delivery):
+**Celery worker** (webhook delivery):
 ```bash
 celery -A orchestrator.celery_app:celery_app worker \
   -l info \
-  -Q pool_reconcile,webhook_delivery \
+  -Q webhook_delivery \
   -n worker@%h
 ```
 
-**Sandbox controller** (Go, required for every sandbox):
+**Sandbox controller** (Go, required for every sandbox and pool):
 ```bash
 cd ../controller
 go run ./cmd/controller --leader-elect=false --kubeconfig ~/.kube/config
 ```
-In a cluster, apply `controller/config/crd.yaml`, `controller/config/rbac.yaml`
-and `controller/config/controller.yaml` instead.
+In a cluster, apply `controller/config/crd.yaml`,
+`controller/config/sandboxpool-crd.yaml`, `controller/config/rbac.yaml` and
+`controller/config/controller.yaml` instead.
 
 > **Tip:** Use [tmux](https://github.com/tmux/tmux/wiki) or [overmind](https://github.com/DarthSim/overmind) to manage multiple terminals conveniently.
 
@@ -94,7 +95,8 @@ orchestrator/src/orchestrator/
 ├── infra/
 │   ├── kubernetes.py      # KubernetesGateway — Pods, Services, Ingresses, ConfigMaps
 │   ├── sandbox_crd.py     # Dynamic client for Sandbox custom resources
-│   └── repositories.py    # ConfigMap-backed repos (TemplateRepo, PoolRepo, WebhookRepo)
+│   ├── sandbox_pool_crd.py# SandboxPool repository
+│   └── repositories.py    # ConfigMap-backed repos (TemplateRepo, WebhookRepo)
 ├── routes/                # HTTP transports
 │   ├── templates.py
 │   ├── sandboxes.py

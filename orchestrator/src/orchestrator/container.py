@@ -4,7 +4,8 @@ from dataclasses import dataclass
 
 from orchestrator.config import Settings, get_settings
 from orchestrator.infra.kubernetes import KubernetesGateway
-from orchestrator.infra.repositories import PoolRepository, TemplateRepository, WebhookRepository
+from orchestrator.infra.repositories import TemplateRepository, WebhookRepository
+from orchestrator.infra.sandbox_pool_crd import SandboxPoolRepository
 from orchestrator.services.envd_proxy import EnvdProxyService
 from orchestrator.services.e2b import E2BControlPlaneService
 from orchestrator.services.exposes import ServiceExposeService
@@ -31,13 +32,13 @@ def build_container(settings: Settings | None = None) -> Container:
     settings = settings or get_settings()
     gateway = KubernetesGateway(settings)
     template_repository = TemplateRepository(gateway)
-    pool_repository = PoolRepository(gateway)
+    pool_repository = SandboxPoolRepository(gateway, settings)
     webhook_repository = WebhookRepository(gateway)
     template_service = TemplateService(template_repository)
     webhook_service = WebhookService(webhook_repository, settings)
     dispatcher = WebhookDispatcher(webhook_repository, settings)
     sandbox_service = SandboxService(gateway, template_service, dispatcher, settings)
-    pool_service = PoolService(pool_repository, sandbox_service, template_service, settings.celery.broker_url)
+    pool_service = PoolService(pool_repository, sandbox_service, template_service)
     expose_service = ServiceExposeService(gateway, sandbox_service, settings)
     sandbox_service.expose_service = expose_service
     envd_proxy_service = EnvdProxyService(settings, gateway)

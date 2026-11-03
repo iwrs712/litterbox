@@ -8,7 +8,7 @@ case "$role" in
     exec uvicorn orchestrator.main:app --host 0.0.0.0 --port 8080
     ;;
   worker)
-    exec celery -A orchestrator.celery_app:celery_app worker -l info -Q pool_reconcile,webhook_delivery -n worker@%h
+    exec celery -A orchestrator.celery_app:celery_app worker -l info -Q webhook_delivery -n worker@%h
     ;;
   *)
     exec "$@"

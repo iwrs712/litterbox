@@ -20,6 +20,7 @@ import (
 	"k8s.io/client-go/tools/leaderelection/resourcelock"
 
 	"github.com/iwrs712/litterbox/controller/internal/controller"
+	"github.com/iwrs712/litterbox/controller/internal/poolcontroller"
 )
 
 func main() {
@@ -64,10 +65,19 @@ func main() {
 	}
 
 	sandboxController := controller.New(clientset, dynamicClient, resync)
+	poolController := poolcontroller.New(dynamicClient, resync)
+	runControllers := func(runCtx context.Context) error {
+		go func() {
+			if err := poolController.Run(runCtx, workers); err != nil {
+				slog.Error("pool controller stopped", "err", err)
+			}
+		}()
+		return sandboxController.Run(runCtx, workers)
+	}
 	startHealthServer(ctx, healthAddr)
 
 	if !leaderElect {
-		if err := sandboxController.Run(ctx, workers); err != nil {
+		if err := runControllers(ctx); err != nil {
 			slog.Error("controller stopped", "err", err)
 			os.Exit(1)
 		}
@@ -99,7 +109,7 @@ func main() {
 		Callbacks: leaderelection.LeaderCallbacks{
 			OnStartedLeading: func(leaderCtx context.Context) {
 				slog.Info("became leader", "identity", identity)
-				if err := sandboxController.Run(leaderCtx, workers); err != nil {
+				if err := runControllers(leaderCtx); err != nil {
 					slog.Error("controller stopped", "err", err)
 				}
 			},

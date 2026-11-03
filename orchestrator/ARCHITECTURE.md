@@ -26,10 +26,11 @@ The codebase is intentionally small and mostly layered:
 The project runs in two process roles:
 
 - `api`: FastAPI + Uvicorn
-- `worker`: Celery worker for pool reconciliation and webhook delivery
+- `worker`: Celery worker for webhook delivery
 
-There is no separate TTL process. The controller schedules a reconcile at
-`spec.ttlAnchor + spec.ttlSeconds` and pauses the sandbox itself.
+There is no pool reconcile task and no TTL process. Warm-pool supply is
+maintained by the `SandboxPool` controller; TTL is maintained by the
+`Sandbox` controller.
 
 ```mermaid
 flowchart LR
@@ -54,7 +55,7 @@ flowchart LR
 - Kubernetes:
   stores `Sandbox` custom resources, runs sandbox Pods and PVCs, and hosts the controller
 - Redis:
-  Celery broker/result backend and warm-pool locking
+  Celery broker/result backend
 - HTTP webhook endpoints:
   external consumers of sandbox lifecycle events
 - Prometheus:
@@ -75,7 +76,7 @@ envd router proxies data-plane traffic to `PodIP:49983`.
 `container.py` builds one `Container` per process:
 
 - `KubernetesGateway` and `SandboxCRDGateway`
-- ConfigMap-backed template, pool and webhook repositories
+- ConfigMap-backed template and webhook repositories, plus `SandboxPoolRepository`
 - `SandboxService`, `PoolService`, `ServiceExposeService`
 - `WebhookDispatcher` / `WebhookService`
 - `EnvdProxyService`
@@ -110,12 +111,19 @@ It never creates Pods or PVCs. Those are the controller's responsibility.
 
 #### `PoolService`
 
-Implements warm pools on top of `SandboxService`:
+Warm-pool CRUD and claim on top of `SandboxService`:
 
-- pool definitions live in ConfigMaps and are protected by Redis locks
-- reconcile creates sandboxes with `pool-state=creating`, waits for readiness and moves them to `available`
-- allocation claims an `available` sandbox and patches it to `allocated`
-- release deletes the CR
+- pool definitions are `SandboxPool` custom resources
+- `create_pool` compiles the template into `spec.sandboxTemplate` once; the
+  pool controller clones it per sandbox
+- reconcile is the controller's job: it maintains `targetReady`,
+  `maxCreating`, pool states and status counts
+- allocation claims an `available` Sandbox with a JSON Patch that tests
+  `metadata.resourceVersion`; a lost race tries the next candidate
+- the claim also clears the pool ownerReference and writes the TTL
+- a missed claim creates directly and asks the controller to replenish via a
+  pool annotation
+- release deletes the CR; the controller observes the delete and replenishes
 
 #### `ServiceExposeService`
 
@@ -161,28 +169,35 @@ Adapts the REST services to the E2B wire format:
 
 - create/get/list/patch/delete `litterbox.io/v1alpha1 Sandbox` objects
 - merge-patch metadata, spec and status
+- JSON Patch support for the optimistic `resourceVersion` claim
 - wait for a target `status.phase` during control-plane operations
+
+#### `SandboxPoolRepository`
+
+- creates/reads/patches/deletes `SandboxPool` custom resources
+- stores `targetReady`, `maxCreating`, `minReady` and the compiled
+  `sandboxTemplate`
+- reads controller-written `status` counts
+- writes a reconcile-request annotation after a pool miss
 
 #### ConfigMap Repositories
 
-Templates, pools and webhooks are JSON documents stored in labeled
-ConfigMaps. Reads are list/get operations against the Kubernetes API.
+Templates and webhooks are JSON documents stored in labeled ConfigMaps.
 
 ## Persistence Model
 
 ### Kubernetes
 
 - `Template` -> ConfigMap `template-<id>`
-- `Pool` -> ConfigMap `pool-<template-id>`
 - `Webhook` -> ConfigMap `webhook-<id>`
 - `Sandbox` -> CRD `sandboxes.litterbox.io`
+- `SandboxPool` -> CRD `sandboxpools.litterbox.io`
 - workspace -> PVC `workspace-<sandbox-id>`, owned by the Sandbox
 - exposes -> Service/Ingress labeled with the sandbox id
 
 ### Redis
 
-- Celery broker and result backend
-- short-lived warm-pool locks (`pool:reconcile:*`, `pool:claim:*`)
+- Celery broker and result backend (webhook delivery)
 
 ## Core Flows
 
@@ -213,17 +228,24 @@ The controller does not read template ConfigMaps.
 ### Warm Pool Allocation
 
 ```text
+create pool
+  -> PoolService compiles template -> SandboxPool.spec.sandboxTemplate
+  -> pool-controller creates pool-state=creating Sandbox CRs
+  -> sandbox-controller creates Pods
+  -> pool-controller marks Running sandboxes available
+
 allocate
   -> PoolService sees an enabled pool
-  -> acquire pool:claim:<template> lock
   -> list pool-state=available CRs
-  -> patch the first one to allocated + TTL anchor
-  -> release lock, dispatch events, enqueue reconcile
+  -> JSON Patch test metadata.resourceVersion
+  -> set pool-state=allocated, user metadata, TTL anchor
+  -> clear ownerReferences (allocated sandboxes survive pool deletion)
+  -> on 409 try the next available sandbox
+  -> pool-controller observes the update and replenishes
 
-reconcile
-  -> create pool-state=creating CRs up to target_ready
-  -> wait for each Pod, patch to available
-  -> delete excess available / failed CRs
+pool miss
+  -> create a direct Sandbox
+  -> patch SandboxPool annotation to request reconcile
 ```
 
 ### Suspend, Resume, TTL
@@ -273,6 +295,9 @@ computed from `SandboxService.status_counts()`.
 
 - `tests/test_sandbox_crd_backend.py`: CR spec compilation, CRD patches,
   status mapping, suspend/resume, lock/unlock, TTL and status counts
+- `tests/test_pool_crd_backend.py`: SandboxPool compilation, optimistic claim,
+  pool repository and allocation fallback
+- `tests/test_kubernetes_gateway.py`: Pod lookup and readiness helpers
 - `tests/test_e2b_control_plane.py`: E2B response mapping
 - `tests/test_envd_proxy.py`, `tests/test_e2b_envd_host_routing.py`: proxy and host routing
 - `tests/test_config_validation.py`: configuration validators
@@ -306,7 +331,8 @@ src/orchestrator/
   infra/
     kubernetes.py         core Kubernetes gateway
     sandbox_crd.py        dynamic client for Sandbox CRs
-    repositories.py       ConfigMap repositories
+    sandbox_pool_crd.py   SandboxPool repository
+    repositories.py       ConfigMap repositories (templates, webhooks)
   domain/
     models.py             REST and internal models
     e2b_models.py         E2B wire models

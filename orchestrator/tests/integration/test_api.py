@@ -75,21 +75,6 @@ def celery_runtime():
         )
         processes.append(webhook_worker)
         wait_for_process_ready(webhook_log)
-        pool_worker, pool_log = start_celery_process(
-            root,
-            "pool-worker",
-            "worker",
-            "-P",
-            "solo",
-            "-l",
-            "info",
-            "-Q",
-            queue_for_worker("pool"),
-            "-n",
-            "pool-test@%h",
-        )
-        processes.append(pool_worker)
-        wait_for_process_ready(pool_log)
         time.sleep(2)
         yield
     finally:

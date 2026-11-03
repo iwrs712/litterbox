@@ -172,13 +172,8 @@ func (c *Controller) reconcile(ctx context.Context, key string, sandbox *v1alpha
 	}
 
 	now := time.Now()
-	var expiresAt *metav1.Time
-	expired := false
-	if sandbox.Spec.TTLSeconds > 0 && sandbox.Spec.TTLAnchor != nil {
-		expiry := sandbox.Spec.TTLAnchor.Add(time.Duration(sandbox.Spec.TTLSeconds) * time.Second)
-		expiresAt = &metav1.Time{Time: expiry}
-		expired = !now.Before(expiry)
-	}
+	expiresAt := ttlExpiry(sandbox.Spec.TTLAnchor, sandbox.Spec.TTLSeconds)
+	expired := expiresAt != nil && !now.Before(expiresAt.Time)
 
 	desiredRunning := sandbox.Spec.State != v1alpha1.StatePaused && !expired
 	pausedReason := ""
@@ -379,6 +374,17 @@ func (c *Controller) updateStatus(
 		"podIP", status.PodIP,
 	)
 	return nil
+}
+
+func ttlExpiry(anchor *metav1.Time, ttlSeconds int64) *metav1.Time {
+	if anchor == nil || ttlSeconds <= 0 {
+		return nil
+	}
+	// metav1.Time JSON uses second precision. Truncate so a status written
+	// from this value compares equal on the next reconcile instead of
+	// rewriting status forever.
+	expiry := anchor.Add(time.Duration(ttlSeconds) * time.Second).Truncate(time.Second)
+	return &metav1.Time{Time: expiry}
 }
 
 func podReady(pod *corev1.Pod) bool {

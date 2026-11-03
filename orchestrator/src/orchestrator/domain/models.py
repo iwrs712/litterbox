@@ -244,6 +244,7 @@ class Pool(BaseModel):
     min_ready: int = 0
     target_ready: int = 0
     max_creating: int = 5
+    sandbox_template: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
 

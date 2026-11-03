@@ -113,6 +113,34 @@ class SandboxService:
             self._dispatch_running_events(sandbox, template, pod)
         return sandbox
 
+    def build_pool_template(
+        self,
+        template: Template,
+        workspace: WorkspaceConfig,
+    ) -> dict:
+        return self.crd.build_pool_template(template=template, workspace=workspace)
+
+    def claim_pool_sandbox(
+        self,
+        *,
+        pool_name: str,
+        name: str,
+        metadata: dict[str, str],
+        ttl_seconds: int,
+    ) -> SandboxResponse | None:
+        sandbox = self.crd.claim_available(
+            pool_name,
+            name=name,
+            metadata=metadata,
+            ttl_seconds=ttl_seconds,
+        )
+        if sandbox is None:
+            return None
+        return self.get_sandbox(sandbox.id)
+
+    def detach_pool_sandboxes(self, pool_name: str) -> None:
+        self.crd.detach_pool_allocated(pool_name)
+
     def get_sandbox(self, sandbox_id: str) -> SandboxResponse:
         sandbox = self.crd.get(sandbox_id)
         try:

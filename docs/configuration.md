@@ -41,9 +41,9 @@ ORCHESTRATOR_ROLE=api
 | 角色 | 进程 | 说明 |
 |---|---|---|
 | `api` | `uvicorn` | REST API、E2B 控制面和 envd 代理，需要 K8s + Redis 访问权限 |
-| `worker` | `celery` | 消费 `pool_reconcile` 和 `webhook_delivery` 队列 |
+| `worker` | `celery` | 消费 `webhook_delivery` 队列；预热池由 `sandbox-controller` 维护 |
 
-> **注意**：沙箱 TTL 由 `sandbox-controller` 处理，不再有独立的 TTL worker 进程。
+> **注意**：沙箱 TTL 和预热池补水都由 `sandbox-controller` 处理，不再有独立的 TTL worker 或 pool reconcile 任务。
 
 ---
 
@@ -131,10 +131,11 @@ max_sandboxes = 1000
 base_domain   = "example.com"
 ```
 
-> 沙箱生命周期由 `Sandbox` CRD 和 `sandbox-controller` 管理。集群中需要安装
-> `controller/config/crd.yaml`、`controller/config/rbac.yaml` 和
-> `controller/config/controller.yaml`，并确保 orchestrator 的 ServiceAccount
-> 有 `sandboxes.litterbox.io` 的读写权限。TTL 到期由控制器在 reconcile 中处理。
+> 沙箱生命周期由 `Sandbox`/`SandboxPool` CRD 和 `sandbox-controller` 管理。集群中需要安装
+> `controller/config/crd.yaml`、`controller/config/sandboxpool-crd.yaml`、
+> `controller/config/rbac.yaml` 和 `controller/config/controller.yaml`，并确保
+> orchestrator 的 ServiceAccount 有 `sandboxes.litterbox.io` 和
+> `sandboxpools.litterbox.io` 的读写权限。TTL 和池补水都由控制器在 reconcile 中处理。
 
 ---
 

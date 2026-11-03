@@ -496,7 +496,7 @@ Removes the Service and Ingress.
 
 ## Pools
 
-Pools maintain a warm inventory of pre-created sandboxes for low-latency allocation.
+Pools maintain a warm inventory of pre-created sandboxes for low-latency allocation. A pool is a `SandboxPool` custom resource; the controller maintains its supply. Allocation claims an `available` sandbox with an optimistic `resourceVersion` JSON Patch, so there is no global lock.
 
 ### Pool Status Object
 
@@ -541,7 +541,7 @@ Returns one Pool Status object.
 
 ### `PUT /api/v1/pools/{template_id}`
 
-Update any of `min_ready`, `target_ready`, `max_creating`. Triggers reconciliation.
+Update any of `min_ready`, `target_ready`, `max_creating`. The controller watches the `SandboxPool` CR and converges. Setting `min_ready` to `0` disables the pool and removes warm, non-allocated sandboxes.
 
 ### `DELETE /api/v1/pools/{template_id}`
 
