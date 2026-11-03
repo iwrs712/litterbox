@@ -43,7 +43,7 @@ ORCHESTRATOR_ROLE=api
 | `api` | `uvicorn` | REST API、E2B 控制面和 envd 代理，需要 K8s + Redis 访问权限 |
 | `worker` | `celery` | 消费 `webhook_delivery` 队列；预热池由 `sandbox-controller` 维护 |
 
-> **注意**：沙箱 TTL 和预热池补水都由 `sandbox-controller` 处理，不再有独立的 TTL worker 或 pool reconcile 任务。
+> **注意**：沙箱 TTL 和预热池补水都由 `sandbox-controller` 处理。
 
 ---
 

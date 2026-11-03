@@ -98,7 +98,7 @@ flowchart LR
 ```
 
 - **控制面。** `/api/v1` 管理模板、池、Webhook、端口暴露和沙箱生命周期；`/e2b` 把同一套服务适配给 E2B SDK。模板、池和 Webhook 的元数据存在 ConfigMap 中。
-- **沙箱生命周期。** API 只写入 `Sandbox` 和 `SandboxPool` 自定义资源；控制器负责创建和回收 Pod/PVC、维护 `status.phase`、处理 TTL 到期、自动修复被删除的 Pod，并维护预热池供给。REST 和 E2B 客户端不直接操作 Kubernetes 工作负载。预热池分配使用基于 `resourceVersion` 的 JSON Patch，不再依赖全局锁。
+- **沙箱生命周期。** API 只写入 `Sandbox` 和 `SandboxPool` 自定义资源；控制器负责创建和回收 Pod/PVC、维护 `status.phase`、处理 TTL 到期、自动修复被删除的 Pod，并维护预热池供给。REST 和 E2B 客户端不直接操作 Kubernetes 工作负载。预热池分配使用基于 `resourceVersion` 的 JSON Patch，不使用全局锁。
 - **数据面。** 启用 envd 后，每个沙箱在 `49983` 端口运行 envd 进程。orchestrator 负责鉴权并将流量代理到 Pod，路径为 `/api/v1/sandboxes/{id}/envd/*`，或通过 E2B 的域名路由。
 - **隔离。** 沙箱使用 Kata RuntimeClass、独立的 `/workspace` PVC，并可选配 NetworkPolicy 入向/出向白名单。
 
@@ -274,7 +274,6 @@ sandbox.kill()                        # 永久删除，同时删除 workspace PV
 | [**docs/api-reference.md**](docs/api-reference.md) | 完整 API 文档 |
 | [**docs/configuration.md**](docs/configuration.md) | 配置项说明 |
 | [**docs/development.md**](docs/development.md) | 本地开发 |
-| [**docs/local-k3s-e2b-deployment.md**](docs/local-k3s-e2b-deployment.md) | 本地 Colima + k3s 部署记录 |
 
 <br>
 

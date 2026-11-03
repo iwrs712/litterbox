@@ -31,7 +31,7 @@ fail halfway through and leave orphaned objects or a sandbox stuck in
 | TTL expiry | external queue + single-threaded worker | reconcile compares `ttlAnchor + ttlSeconds` with now |
 | Crash recovery | no background repair | next reconcile repairs missing Pod/PVC |
 | Cleanup | manual delete order | `ownerReference` garbage collection |
-| Pod identity | Deployment + ReplicaSet + Pod | Pod only |
+| Pod identity | workload + controller objects | Pod only |
 
 ## Reconciliation
 
