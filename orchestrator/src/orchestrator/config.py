@@ -26,7 +26,7 @@ class KubernetesConfig(BaseModel):
 
 class SandboxConfig(BaseModel):
     max_sandboxes: int = 1000
-    base_domain: str = "runlet.cn"
+    base_domain: str = "example.com"
 
 
 class WorkspaceConfig(BaseModel):
@@ -71,7 +71,7 @@ class EnvdConfig(BaseModel):
 class E2BConfig(BaseModel):
     enabled: bool = False
     api_key: str = ""
-    domain: str = "runlet.cn"
+    domain: str = "sandbox.example.com"
     envd_version: str = "0.1.0"
 
 

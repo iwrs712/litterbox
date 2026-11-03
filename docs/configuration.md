@@ -113,7 +113,7 @@ image_pull_secret = ""
 | Key | 类型 | 默认值 | 说明 |
 |---|---|---|---|
 | `max_sandboxes` | integer | `1000` | 沙箱数量上限配置。当前用于限制 envd Pod IP 缓存大小，未在创建路径强制拒绝 |
-| `base_domain` | string | `"runlet.cn"` | HTTP 暴露的通配符域名。每个沙箱的暴露端口路由为 `<sandbox-id>.<base_domain>`。需要配置 `*.<base_domain>` 的 DNS 记录指向 Ingress Controller |
+| `base_domain` | string | `"example.com"` | HTTP 暴露的通配符域名。每个沙箱的暴露端口路由为 `<sandbox-id>.<base_domain>`。需要配置 `*.<base_domain>` 的 DNS 记录指向 Ingress Controller |
 
 **环境变量：**
 
@@ -125,7 +125,7 @@ ORCHESTRATOR__SANDBOX__BASE_DOMAIN=sandbox.example.com
 ```toml
 [sandbox]
 max_sandboxes = 1000
-base_domain   = "runlet.cn"
+base_domain   = "example.com"
 ```
 
 ---
@@ -158,7 +158,7 @@ default_size  = "1Gi"
 storage_class = "litterbox-workspace-lvm"
 ```
 
-> PVC 在暂停/恢复后保留；只有永久删除 Sandbox 时才会删除。StorageClass 需要提前安装，参见 [orchestrator/k8s/storage](../orchestrator/k8s/storage/README.md)。
+> PVC 在暂停/恢复后保留；只有永久删除 Sandbox 时才会删除。StorageClass 需要按部署环境提前安装。
 
 ---
 
@@ -197,7 +197,7 @@ connect_timeout_seconds = 3.0
 pod_ip_cache_ttl_seconds = 5.0
 ```
 
-> 启用前必须先在 Kata 节点上安装 envd，参见 [orchestrator/k8s/envd](../orchestrator/k8s/envd/README.md)。节点缺少对应版本标签时，新 Sandbox 会保持 Pending。
+> 启用前必须先在 Kata 节点上安装 envd。节点缺少对应版本标签时，新 Sandbox 会保持 Pending。
 
 ---
 
@@ -209,7 +209,7 @@ E2B 兼容控制面配置。启用后，官方 E2B SDK 可以访问 `/e2b/sandbo
 |---|---|---|---|
 | `enabled` | boolean | `true` | 是否启用 `/e2b` 控制面和通配域名路由 |
 | `api_key` | string | `""` | E2B `X-API-Key`；为空时接受 `auth.bearer_token` |
-| `domain` | string | `"sandbox.runlet.cn"` | 数据面通配域名。需要 `*.{domain}` 的 DNS 和 TLS 指向 orchestrator |
+| `domain` | string | `"sandbox.example.com"` | 数据面通配域名。需要 `*.{domain}` 的 DNS 和 TLS 指向 orchestrator |
 | `envd_version` | string | `"0.1.0"` | 返回给 SDK 的 envd 版本 |
 
 **环境变量：**
@@ -225,7 +225,7 @@ ORCHESTRATOR__E2B__ENVD_VERSION=0.1.0
 [e2b]
 enabled      = true
 api_key      = ""
-domain       = "sandbox.runlet.cn"
+domain       = "sandbox.example.com"
 envd_version = "0.1.0"
 ```
 
@@ -477,10 +477,10 @@ bearer_token = "replace-with-strong-token"
 | `ORCHESTRATOR__ENVD__POD_IP_CACHE_TTL_SECONDS` | `envd.pod_ip_cache_ttl_seconds` | `5.0` |
 | `ORCHESTRATOR__E2B__ENABLED` | `e2b.enabled` | `true` |
 | `ORCHESTRATOR__E2B__API_KEY` | `e2b.api_key` | `""` |
-| `ORCHESTRATOR__E2B__DOMAIN` | `e2b.domain` | `sandbox.runlet.cn` |
+| `ORCHESTRATOR__E2B__DOMAIN` | `e2b.domain` | `sandbox.example.com` |
 | `ORCHESTRATOR__E2B__ENVD_VERSION` | `e2b.envd_version` | `0.1.0` |
 | `ORCHESTRATOR__SANDBOX__MAX_SANDBOXES` | `sandbox.max_sandboxes` | `1000` |
-| `ORCHESTRATOR__SANDBOX__BASE_DOMAIN` | `sandbox.base_domain` | `runlet.cn` |
+| `ORCHESTRATOR__SANDBOX__BASE_DOMAIN` | `sandbox.base_domain` | `example.com` |
 | `ORCHESTRATOR__TTL__DEFAULT_TTL_SECONDS` | `ttl.default_ttl_seconds` | `1800` |
 | `ORCHESTRATOR__TTL__MIN_TTL_SECONDS` | `ttl.min_ttl_seconds` | `60` |
 | `ORCHESTRATOR__TTL__MAX_TTL_SECONDS` | `ttl.max_ttl_seconds` | `86400` |

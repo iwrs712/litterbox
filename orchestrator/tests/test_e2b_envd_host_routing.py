@@ -12,13 +12,13 @@ from orchestrator.routes.envd import parse_sandbox_envd_host
 
 
 def test_parse_sandbox_envd_host_accepts_configured_port_and_domain() -> None:
-    assert parse_sandbox_envd_host("49983-sbx-123.runlet.cn", "runlet.cn", 49983) == "sbx-123"
-    assert parse_sandbox_envd_host("49983-sbx-123.runlet.cn:443", "runlet.cn", 49983) == "sbx-123"
+    assert parse_sandbox_envd_host("49983-sbx-123.example.com", "example.com", 49983) == "sbx-123"
+    assert parse_sandbox_envd_host("49983-sbx-123.example.com:443", "example.com", 49983) == "sbx-123"
 
 
 def test_parse_sandbox_envd_host_rejects_other_ports_or_domains() -> None:
-    assert parse_sandbox_envd_host("50000-sbx-123.runlet.cn", "runlet.cn", 49983) is None
-    assert parse_sandbox_envd_host("49983-sbx-123.other.cn", "runlet.cn", 49983) is None
+    assert parse_sandbox_envd_host("50000-sbx-123.example.com", "example.com", 49983) is None
+    assert parse_sandbox_envd_host("49983-sbx-123.other.cn", "example.com", 49983) is None
 
 
 def test_e2b_sandbox_host_is_rewritten_to_existing_envd_proxy(monkeypatch) -> None:
@@ -31,7 +31,7 @@ def test_e2b_sandbox_host_is_rewritten_to_existing_envd_proxy(monkeypatch) -> No
     container = SimpleNamespace(
         settings=Settings(
             auth={"bearer_token": ""},
-            e2b=E2BConfig(enabled=True, domain="runlet.cn"),
+            e2b=E2BConfig(enabled=True, domain="example.com"),
             envd=EnvdConfig(port=49983),
         ),
         sandbox_service=SimpleNamespace(
@@ -44,7 +44,7 @@ def test_e2b_sandbox_host_is_rewritten_to_existing_envd_proxy(monkeypatch) -> No
     with TestClient(main_module.app) as client:
         response = client.post(
             "/process.Process/Start",
-            headers={"Host": "49983-sbx-123.runlet.cn"},
+            headers={"Host": "49983-sbx-123.example.com"},
             json={"command": "echo hi"},
         )
 
@@ -56,13 +56,13 @@ def test_e2b_sandbox_host_is_not_rewritten_when_e2b_is_disabled(monkeypatch) -> 
     container = SimpleNamespace(
         settings=Settings(
             auth={"bearer_token": ""},
-            e2b=E2BConfig(enabled=False, domain="runlet.cn"),
+            e2b=E2BConfig(enabled=False, domain="example.com"),
             envd=EnvdConfig(port=49983),
         ),
     )
     monkeypatch.setattr(main_module, "build_container", lambda: container)
 
     with TestClient(main_module.app) as client:
-        response = client.get("/health", headers={"Host": "49983-sbx-123.runlet.cn"})
+        response = client.get("/health", headers={"Host": "49983-sbx-123.example.com"})
 
     assert response.status_code == 200

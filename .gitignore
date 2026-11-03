@@ -81,6 +81,11 @@ AgentENV-main/
 # Local-only components, not published to this repo
 sandbox-agent-go/
 sandbox-image/
+# Private deployment and runtime scripts (kept local, never committed)
+/Makefile
+/orchestrator/Makefile
+/orchestrator/k8s/
+/dashboard/wrangler.jsonc
 # Craft Agent / IDE tool dirs
 .omx/
 .baidu-cc/

@@ -195,14 +195,14 @@ def test_envd_cors_preflight_is_answered_without_contacting_upstream(monkeypatch
         response = client.options(
             "/api/v1/sandboxes/sbx-1/envd/process.Process/Start",
             headers={
-                "Origin": "https://dashboard.runlet.cn",
+                "Origin": "https://dashboard.example.com",
                 "Access-Control-Request-Method": "POST",
                 "Access-Control-Request-Headers": "authorization,content-type",
             },
         )
 
     assert response.status_code == 200
-    assert response.headers["access-control-allow-origin"] == "https://dashboard.runlet.cn"
+    assert response.headers["access-control-allow-origin"] == "https://dashboard.example.com"
     assert upstream_calls == 0
 
 

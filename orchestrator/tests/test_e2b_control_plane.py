@@ -77,7 +77,7 @@ def build_client(monkeypatch):
     sandbox_service = RecordingSandboxService()
     pool_service = RecordingPoolService(sandbox_service)
     container = SimpleNamespace(
-        settings=Settings(e2b=E2BConfig(enabled=True, api_key="e2b-secret", domain="runlet.cn")),
+        settings=Settings(e2b=E2BConfig(enabled=True, api_key="e2b-secret", domain="example.com")),
         sandbox_service=sandbox_service,
         pool_service=pool_service,
     )
@@ -112,7 +112,7 @@ def test_e2b_create_uses_native_fields_and_returns_unwrapped_response(monkeypatc
     assert response.json()["templateID"] == "python-worker"
     assert response.json()["clientID"] == "litterbox"
     assert response.json()["envdAccessToken"] == "e2b-secret"
-    assert response.json()["domain"] == "runlet.cn"
+    assert response.json()["domain"] == "example.com"
     assert "success" not in response.json()
     request = container.pool_service.requests[0]
     assert request.template_id == "python-worker"

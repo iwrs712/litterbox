@@ -370,11 +370,11 @@ Scale the Deployment back up. If the sandbox was suspended by TTL expiry, `resum
 
 #### `POST /api/v1/sandboxes/{sandbox_id}/lock`
 
-Set the business lock. A locked sandbox can still be queried, suspended and deleted, but `resume` is rejected.
+Set the sandbox lock. A locked sandbox can still be queried, suspended and deleted, but `resume` is rejected.
 
 #### `POST /api/v1/sandboxes/{sandbox_id}/unlock`
 
-Clear the business lock.
+Clear the sandbox lock.
 
 ---
 

@@ -2,12 +2,12 @@
 
 # 🐱 Litterbox
 
-**Secure sandbox orchestration platform, built for AI Agents.**
+**Secure sandbox orchestration for AI agents.**
 
-Kubernetes-native REST API and an E2B-compatible sandbox control plane. Runs untrusted code in VM-level isolated environments via Kata Containers.
+Kubernetes-native. REST API and an E2B-compatible control plane. VM-level isolation with Kata Containers.
 <br>
 
-[简体中文](README.zh.md) · [API Reference](docs/api-reference.md) · [E2B API Guide](orchestrator/docs/API.md) · [Configuration](docs/configuration.md)
+[简体中文](README.zh.md) · [API Reference](docs/api-reference.md) · [E2B Guide](orchestrator/docs/API.md) · [Configuration](docs/configuration.md)
 
 </div>
 
@@ -15,51 +15,29 @@ Kubernetes-native REST API and an E2B-compatible sandbox control plane. Runs unt
 
 ## What is Litterbox?
 
-Litterbox turns Kubernetes into a secure sandbox runtime. Define a template (image, resources, env), and Litterbox provisions isolated Pods, manages lifecycle, and exposes services on demand. Each sandbox runs in a VM with its own guest kernel — untrusted code or files cannot escape to the host or affect other workloads.
-
-It exposes a private REST API under `/api/v1` and an E2B-compatible control plane under `/e2b`, so existing E2B SDKs can create, connect, pause and kill sandboxes without code changes.
+Define a template, and Litterbox provisions an isolated sandbox on Kubernetes, manages its lifecycle, and exposes services on demand. Each sandbox runs in its own VM with a separate guest kernel, so untrusted code cannot reach the host or other workloads.
 
 ```text
-POST /e2b/sandboxes     →  E2B SDK compatible: create / connect / pause / kill
-POST /api/v1/sandboxes  →  native REST control plane, running sandbox in < 200ms (warm pool)
-                         →  command exec, file I/O and PTY through the envd data plane
-                         →  auto-suspended when TTL expires (workspace retained)
+POST /e2b/sandboxes       create a sandbox with the E2B SDK
+POST /api/v1/sandboxes    native REST control plane
+                          exec, files and PTY through envd
+                          suspend on TTL, delete on demand
 ```
 
 <br>
 
-## Core Capabilities
+## Features
 
-<table>
-<tr>
-<td width="140"><strong>Warm Pool</strong></td>
-<td>Pre-boots sandboxes per template. Allocation latency as low as <strong>&lt; 50ms</strong>.</td>
-</tr>
-<tr>
-<td><strong>Lifecycle</strong></td>
-<td>TTL auto-suspension keeps <code>/workspace</code>; permanent deletion on demand.</td>
-</tr>
-<tr>
-<td><strong>E2B Compatible</strong></td>
-<td>Official E2B SDKs drive the <code>/e2b</code> control plane: create, connect, pause, resume, timeout and kill.</td>
-</tr>
-<tr>
-<td><strong>Terminal</strong></td>
-<td>Web terminal, command exec and PTY sessions through the envd data plane.</td>
-</tr>
-<tr>
-<td><strong>File System</strong></td>
-<td>Read and write files inside a sandbox through envd (SDK or REST proxy).</td>
-</tr>
-<tr>
-<td><strong>Expose</strong></td>
-<td>Expose any in-sandbox port to external network access.</td>
-</tr>
-<tr>
-<td><strong>Webhooks</strong></td>
-<td><code>sandbox_started</code> · <code>sandbox_ready</code> · <code>sandbox_deleted</code> events. Async delivery with configurable timeout and retry.</td>
-</tr>
-</table>
+| Feature | Description |
+|---|---|
+| **VM isolation** | Sandboxes run under a Kata Containers RuntimeClass with their own guest kernel. |
+| **Warm pool** | Pre-boots sandboxes per template for low-latency allocation. |
+| **Workspace** | One persistent `/workspace` PVC per sandbox, retained across suspend and resume. |
+| **E2B compatible** | Official E2B SDKs can create, connect, pause, resume and kill sandboxes. |
+| **Lifecycle** | TTL auto-suspension, warm-pool reconciliation, sandbox lock, permanent delete. |
+| **Terminal & files** | Command execution, file I/O and PTY sessions through the envd data plane. |
+| **Expose** | Publish any sandbox port through a Service and Ingress. |
+| **Webhooks** | Async `sandbox_started`, `sandbox_ready` and `sandbox_deleted` events. |
 
 <br>
 
@@ -81,115 +59,73 @@ POST /api/v1/sandboxes  →  native REST control plane, running sandbox in < 200
 ## Architecture
 
 ```mermaid
-graph TB
+flowchart LR
     subgraph Clients["Clients"]
-        Dashboard["Dashboard\n(React)"]
-        E2B["E2B SDKs\n(Python / JS)"]
-        APIClients["API Clients /\nWebhook Endpoints"]
+        Dashboard["Dashboard"]
+        RestClient["REST clients"]
+        Sdk["E2B SDK"]
     end
 
-    subgraph Orchestrator["Orchestrator  (FastAPI · uvicorn)"]
-        Auth["Auth\nBearer Token / X-API-Key"]
-        E2BAPI["E2B Control Plane\n/e2b/sandboxes"]
-        REST["REST API\n/api/v1/*"]
-        HostRouter["Wildcard Host Router\n49983-sandbox-id.domain"]
-        EnvdProxy["envd Proxy\n/api/v1/sandboxes/{id}/envd/*"]
+    subgraph Orchestrator["Orchestrator  (FastAPI + Celery)"]
+        Rest["REST API\n/api/v1"]
+        E2B["E2B API\n/e2b"]
+        Proxy["envd proxy"]
     end
 
-    subgraph Workers["Orchestrator Workers  (Celery + TTL loop)"]
-        Pool["Pool\nReconciler"]
-        Webhook["Webhook\nDelivery"]
-        TTL["TTL\nCleaner"]
+    Redis[("Redis\nCelery · TTL · locks")]
+
+    subgraph Cluster["Kubernetes"]
+        Sandbox["Sandbox Pod\nmain + envd + /workspace PVC"]
+        Runtime["RuntimeClass"]
+        NetPol["NetworkPolicy"]
     end
 
-    Redis[("Redis\nCelery Broker\nTTL Sorted Set\nLocks")]
-
-    subgraph Cluster["Kubernetes Cluster"]
-        RuntimeClass["RuntimeClass\nkata-clh (default)"]
-        NetPol["NetworkPolicy\nsandbox ingress / egress"]
-        Installer["DaemonSet\nenvd-node-installer"]
-
-        subgraph Pod["Sandbox Pod  (one Deployment per sandbox)"]
-            Main["main container"]
-            Envd["envd\nsandbox-agent :49983"]
-            PVC[("workspace PVC\n/workspace")]
-        end
-
-        Svc["Service / Ingress\nport exposes"]
-    end
-
-    Dashboard -->|"REST"| Auth
-    APIClients -->|"REST"| Auth
-    E2B -->|"E2B API"| Auth
-    E2B -->|"envd over HTTPS"| HostRouter
-
-    Auth --> E2BAPI
-    Auth --> REST
-    HostRouter --> EnvdProxy
-    E2BAPI --> REST
-    Dashboard -->|"envd stream"| EnvdProxy
-
-    REST -->|"K8s API"| Cluster
-    Pool -->|"K8s API"| Cluster
-    Webhook -->|"HTTP"| APIClients
-    TTL -->|"K8s API"| Cluster
-    EnvdProxy -->|"Pod IP :49983"| Envd
-
-    Orchestrator <-->|"Task queue"| Redis
-    Workers <-->|"Task queue"| Redis
-
-    Installer -.->|"hostPath binary"| Envd
-    RuntimeClass -.->|"VM isolation"| Pod
-    NetPol -.->|"allowlist"| Pod
-    Svc --> Pod
+    Dashboard --> Rest
+    RestClient --> Rest
+    Sdk --> E2B
+    Sdk -->|"envd"| Proxy
+    Dashboard -->|"envd"| Proxy
+    Rest -->|"Kubernetes API"| Cluster
+    E2B --> Rest
+    Orchestrator <--> Redis
+    Proxy -->|"Pod IP :49983"| Sandbox
+    Runtime -.-> Sandbox
+    NetPol -.-> Sandbox
 ```
 
-**Control plane.** The private REST API under `/api/v1` manages templates, warm pools, webhooks, port exposes and sandbox lifecycle. The E2B-compatible routes under `/e2b/sandboxes` adapt the same services to the official E2B SDK. Templates, pools and webhooks live in ConfigMaps; sandbox state lives in Deployment labels and annotations; TTL schedules and pool locks live in Redis. Celery workers reconcile warm pools and deliver webhooks; a separate TTL loop suspends expired sandboxes.
+- **Control plane.** `/api/v1` manages templates, pools, webhooks, exposes and sandbox lifecycle. `/e2b` adapts the same services to the E2B SDK. Template, pool and webhook metadata live in ConfigMaps; sandbox state lives in Deployment labels and annotations; TTL schedules and locks live in Redis.
+- **Data plane.** When enabled, each sandbox runs an envd process on port `49983`. The orchestrator proxies authenticated traffic to the Pod, either at `/api/v1/sandboxes/{id}/envd/*` or through E2B host routing.
+- **Isolation.** Sandboxes use a Kata RuntimeClass, a per-sandbox `/workspace` PVC, and optionally a NetworkPolicy allowlist for ingress and egress.
 
-**Data plane.** Every sandbox is a Deployment with one `main` container. When envd is enabled, the `envd-node-installer` DaemonSet places the `sandbox-agent` binary on each Kata node, the orchestrator mounts it into the pod, and a `postStart` hook starts it on port `49983`. Command execution, file I/O and PTY sessions all go through envd. The orchestrator authenticates and proxies that traffic to the sandbox Pod IP, either path-based (`/api/v1/sandboxes/{id}/envd/*`) or via E2B host routing (`49983-{sandbox-id}.{domain}`).
+<br>
 
-**Isolation and storage.** Sandbox Pods run under the `kata-clh` RuntimeClass by default, giving each sandbox its own guest kernel. Each sandbox also gets a `/workspace` PVC (LVM-backed by default), which survives pause/resume and is deleted only on permanent kill. Where installed, NetworkPolicies restrict sandbox ingress to the orchestrator and Traefik, and egress to DNS, the billing proxy and the public internet.
-
-### Prerequisites
+## Quick Start
 
 | | Version |
 |---|---|
-| Kubernetes | `k3s recommended` |
-| Docker Compose | `v2+` |
-| Node.js | `18+` |
-| Python | `3.12+` |
+| Kubernetes | k3s recommended |
+| Docker Compose | v2+ |
+| Python | 3.12+ |
+| Node.js | 18+ |
 
-### 1. Start the Backend
+### 1. Start the backend
 
 ```bash
 cd orchestrator
-cp .env.example .env      # → edit KUBECONFIG, K8S_NAMESPACE, BASE_DOMAIN
+cp .env.example .env      # set KUBECONFIG, K8S_NAMESPACE, BASE_DOMAIN
 docker compose up --build
 ```
-
-Verify:
 
 ```bash
 curl http://localhost:8080/health
 # {"success": true, "message": "Litterbox API is running"}
 ```
 
-### 2. Start the Dashboard
+> If `ORCHESTRATOR__AUTH__BEARER_TOKEN` is set, add `Authorization: Bearer <token>` to REST calls.
+
+### 2. Create a template
 
 ```bash
-cd dashboard
-cp .env.example .env      # → set VITE_API_BASE_URL and VITE_API_BEARER_TOKEN
-npm install && npm run dev
-```
-
-Open **http://localhost:5173**
-
-> **Auth:** If the backend has `ORCHESTRATOR__AUTH__BEARER_TOKEN` set, add the same value to `VITE_API_BEARER_TOKEN` in `dashboard/.env`. Leave it empty for open access.
-
-### 3. Create Your First Sandbox
-
-```bash
-# 1. Create a template
 curl -s -X POST http://localhost:8080/api/v1/templates \
   -H "Content-Type: application/json" \
   -d '{
@@ -200,58 +136,50 @@ curl -s -X POST http://localhost:8080/api/v1/templates \
     "cpu_millicores": 500,
     "memory_mb": 512,
     "ttl_seconds": 3600
-  }' | jq .data.id
-# → "ubuntu"
-
-# 2. Spin up a sandbox from the template
-curl -s -X POST http://localhost:8080/api/v1/sandboxes \
-  -H "Content-Type: application/json" \
-  -d '{"template_id": "ubuntu"}' | jq .data.id
-# → "xyz789"
+  }'
 ```
 
-To execute commands, read/write files or open a PTY, use the E2B SDK or the envd proxy — see [E2B Compatibility](#e2b-compatibility). envd must be installed and enabled first; it is off by default.
+### 3. Create a sandbox
 
+```bash
+pip install e2b
+```
 
-## API
+```python
+from e2b import Sandbox
 
-| Action | Method | Path |
-|---|---|---|
-| Create template | `POST` | `/api/v1/templates` |
-| Create sandbox | `POST` | `/api/v1/sandboxes` |
-| Suspend / resume sandbox | `POST` | `/api/v1/sandboxes/:id/suspend` · `/api/v1/sandboxes/:id/resume` |
-| Renew TTL | `POST` | `/api/v1/sandboxes/:id/renew` |
-| Expose port | `POST` | `/api/v1/sandboxes/:id/exposes` |
-| Create warm pool | `POST` | `/api/v1/pools/:template_id` |
-| Register webhook | `POST` | `/api/v1/webhooks` |
-| E2B create / get / kill | `POST` `GET` `DELETE` | `/e2b/sandboxes` · `/e2b/sandboxes/:id` |
-| E2B connect / pause / timeout | `POST` | `/e2b/sandboxes/:id/connect` · `/pause` · `/timeout` |
-| envd data plane (SDK) | `HTTP / Connect RPC` | `49983-:id.<e2b.domain>` |
-| envd proxy (diagnostics) | `HTTP / Connect RPC` | `/api/v1/sandboxes/:id/envd/*` |
+sandbox = Sandbox.create(
+    template="ubuntu",
+    api_url="http://localhost:8080/e2b",
+    domain="localhost",
+)
+print(sandbox.sandbox_id)
+```
 
-Each resource group supports full CRUD (`GET` / `PATCH` / `DELETE`).
+Command execution and file access require envd; see [E2B Compatibility](#e2b-compatibility).
 
-> 📖 **Full API reference** → [docs/api-reference.md](docs/api-reference.md)
+### 4. Start the dashboard
+
+```bash
+cd dashboard
+cp .env.example .env      # set VITE_API_BASE_URL and VITE_API_BEARER_TOKEN
+npm install && npm run dev
+```
+
+Open **http://localhost:5173**.
 
 <br>
 
 ## E2B Compatibility
 
-Litterbox implements the subset of the E2B control plane and envd data plane needed to run the official E2B SDKs. End-to-end testing has been done with [`e2b`](https://pypi.org/project/e2b/) Python SDK 2.46; compatible 2.x releases should work.
+Litterbox implements a compatible subset of the E2B control plane and envd data plane, and can run the official E2B SDKs directly.
 
-### Before You Start
+To use it:
 
-- Set `ORCHESTRATOR__E2B__ENABLED=true`.
-- Set `ORCHESTRATOR__E2B__API_KEY` to the key clients present as `X-API-Key`. When empty, the orchestrator bearer token is accepted instead.
-- Point `ORCHESTRATOR__E2B__DOMAIN` at a wildcard domain (for example `sandbox.runlet.cn`) whose `*.sandbox.runlet.cn` DNS record and TLS certificate route to the orchestrator. The SDK reaches sandbox data planes at `49983-{sandboxID}.{domain}`.
-- Enable and install envd on the Kata nodes (`ORCHESTRATOR__ENVD__ENABLED=true`, see [orchestrator/k8s/envd](orchestrator/k8s/envd/README.md)).
-- Create the template first through `/api/v1/templates`; E2B `Sandbox.create(template=...)` only selects an existing template and does not build images.
-
-### Python SDK
-
-```bash
-pip install e2b
-```
+- Set `ORCHESTRATOR__E2B__ENABLED=true` and an `ORCHESTRATOR__E2B__API_KEY` (empty falls back to the orchestrator bearer token).
+- Point `ORCHESTRATOR__E2B__DOMAIN` at a wildcard domain whose DNS and TLS certificate route to the orchestrator.
+- Install envd on the Kubernetes nodes and enable it with `ORCHESTRATOR__ENVD__ENABLED=true`.
+- Create the template first; `Sandbox.create` selects an existing template and does not build images.
 
 ```python
 from e2b import Sandbox
@@ -262,69 +190,71 @@ config = {
     "api_key": "<E2B_API_KEY>",
 }
 
-sandbox = Sandbox.create(
-    template="ubuntu",
-    timeout=300,
-    metadata={"job_id": "1001"},
-    **config,
-)
+sandbox = Sandbox.create(template="ubuntu", timeout=300, **config)
 
-# Commands, files and PTY go through the envd data plane.
 print(sandbox.commands.run("uname -a").stdout)
 sandbox.files.write("/workspace/notes.txt", "hello")
 print(sandbox.files.read("/workspace/notes.txt"))
 
-# Scale to zero but keep the /workspace PVC.
-sandbox.pause(keep_memory=False)
-
-# Reconnect; this resumes the paused sandbox.
+sandbox.pause(keep_memory=False)      # keep the workspace PVC
 sandbox = Sandbox.connect(sandbox.sandbox_id, **config)
-
 sandbox.set_timeout(600)
-
-# Permanent: deletes the Deployment and the workspace PVC.
-sandbox.kill()
+sandbox.kill()                        # permanent; deletes the workspace PVC
 ```
 
-`envdAccessToken` from the create response is used automatically by the SDK. If you talk to envd with a plain HTTP client instead, send it as `X-Access-Token`; do not call the Connect RPC endpoints with bare JSON.
-
-### Supported Semantics
-
-| E2B capability | Litterbox behavior |
+| Capability | Status |
 |---|---|
-| `Sandbox.create` / `connect` / `kill`, sandbox lookup | Supported; `connect` resumes a suspended sandbox |
-| `Sandbox.pause(keep_memory=False)` | Supported; scales the Deployment to zero, keeps `/workspace` |
-| `Sandbox.set_timeout` | Supported; `0` means no expiry |
-| `commands.run`, `files.read/write`, PTY streams | Supported through envd |
-| Workspace persistence | `/workspace` survives pause/connect, deleted only on `kill()` |
+| `Sandbox.create` / `connect` / `kill` | Supported |
+| `pause(keep_memory=False)` | Supported; keeps `/workspace` |
+| `pause(keep_memory=True)` | Not supported (`409`) |
+| `set_timeout` | Supported; `0` disables expiry |
+| Commands, files, PTY | Supported through envd |
 
-Not supported: `pause(keep_memory=True)` memory snapshots (returns `409`), snapshots, fork, template builds, E2B volumes, network allow/deny policies (`allow_internet_access=false` returns `400`), and traffic access tokens.
+Not supported: memory snapshots (`pause(keep_memory=True)`), fork, template builds, E2B volumes, and network allow/deny policies.
 
-> **Note:** the SDK's context manager calls `kill()` on exit. Use explicit `pause(keep_memory=False)` when the workspace should outlive the session.
-> 📖 **Full E2B guide, raw endpoints and troubleshooting** → [orchestrator/docs/API.md](orchestrator/docs/API.md)
+> The SDK context manager calls `kill()` on exit. Use `pause(keep_memory=False)` to keep the workspace.
+>
+> 📖 **Full E2B guide** → [orchestrator/docs/API.md](orchestrator/docs/API.md)
+
+<br>
+
+## API
+
+| Group | Method | Path |
+|---|---|---|
+| Templates | `POST` / `GET` / `PATCH` / `DELETE` | `/api/v1/templates` |
+| Sandboxes | `POST` / `GET` / `PATCH` / `DELETE` | `/api/v1/sandboxes` |
+| Lifecycle | `POST` | `/api/v1/sandboxes/:id/suspend` · `resume` · `lock` · `unlock` · `renew` |
+| Exposes | `POST` / `GET` / `DELETE` | `/api/v1/sandboxes/:id/exposes` |
+| Pools | `POST` / `GET` / `PUT` / `DELETE` | `/api/v1/pools/:template_id` |
+| Webhooks | `POST` / `GET` / `PATCH` / `DELETE` | `/api/v1/webhooks` |
+| E2B control plane | `POST` / `GET` / `DELETE` | `/e2b/sandboxes` · `/e2b/sandboxes/:id` |
+| E2B lifecycle | `POST` | `/e2b/sandboxes/:id/connect` · `pause` · `timeout` |
+| envd path proxy | HTTP / Connect RPC | `/api/v1/sandboxes/:id/envd/*` |
+
+> 📖 **Full API reference** → [docs/api-reference.md](docs/api-reference.md)
 
 <br>
 
 ## Configuration
 
-Backend is configured via `config.toml` with environment variable overrides (`ORCHESTRATOR__<SECTION>__<KEY>`).
+Configuration comes from `config.toml`, overridden by `ORCHESTRATOR__<SECTION>__<KEY>` environment variables.
 
 | Variable | Default | Description |
 |---|---|---|
-| `ORCHESTRATOR__KUBERNETES__KUBECONFIG` | *empty (in-cluster)* | Path to kubeconfig; unset = in-cluster auth |
+| `ORCHESTRATOR__KUBERNETES__KUBECONFIG` | *empty (in-cluster)* | Path to kubeconfig |
 | `ORCHESTRATOR__KUBERNETES__NAMESPACE` | `default` | Namespace for sandbox resources |
-| `ORCHESTRATOR__KUBERNETES__RUNTIME_CLASS` | `kata-clh` | RuntimeClass applied if it exists in the cluster (VM isolation) |
-| `ORCHESTRATOR__WORKSPACE__STORAGE_CLASS` | `litterbox-workspace-lvm` | StorageClass for per-sandbox `/workspace` PVCs |
-| `ORCHESTRATOR__ENVD__ENABLED` | `false` | Inject and start the envd data plane in sandbox pods |
-| `ORCHESTRATOR__ENVD__VERSION` | `0.1.0` | envd version, also used as the node selector label |
-| `ORCHESTRATOR__E2B__ENABLED` | `true` | Expose the E2B-compatible control plane under `/e2b` |
-| `ORCHESTRATOR__E2B__API_KEY` | *empty* | E2B `X-API-Key`; falls back to the bearer token when empty |
-| `ORCHESTRATOR__E2B__DOMAIN` | `sandbox.runlet.cn` | Wildcard data-plane domain (`49983-:id.<domain>`) |
-| `ORCHESTRATOR__SANDBOX__BASE_DOMAIN` | `runlet.cn` | Wildcard domain for HTTP exposes |
-| `ORCHESTRATOR__SANDBOX__MAX_SANDBOXES` | `1000` | Max concurrent sandboxes |
-| `ORCHESTRATOR__TTL__DEFAULT_TTL_SECONDS` | `1800` | Default sandbox lifetime (seconds) |
-| `ORCHESTRATOR__CELERY__BROKER_URL` | `redis://127.0.0.1:6379/2` | Celery broker Redis URL |
-| `ORCHESTRATOR__AUTH__BEARER_TOKEN` | *empty* | Optional shared Bearer token for `/api/v1/*` and E2B fallback auth |
+| `ORCHESTRATOR__KUBERNETES__RUNTIME_CLASS` | `kata-clh` | RuntimeClass for VM isolation, applied if it exists |
+| `ORCHESTRATOR__WORKSPACE__STORAGE_CLASS` | `litterbox-workspace-lvm` | StorageClass for `/workspace` PVCs |
+| `ORCHESTRATOR__ENVD__ENABLED` | `false` | Inject and start envd in sandbox pods |
+| `ORCHESTRATOR__ENVD__VERSION` | `0.1.0` | envd version and node selector label |
+| `ORCHESTRATOR__E2B__ENABLED` | `true` | Expose the E2B control plane |
+| `ORCHESTRATOR__E2B__API_KEY` | *empty* | E2B `X-API-Key`; falls back to the bearer token |
+| `ORCHESTRATOR__E2B__DOMAIN` | `sandbox.example.com` | Wildcard data-plane domain |
+| `ORCHESTRATOR__SANDBOX__BASE_DOMAIN` | `example.com` | Wildcard domain for HTTP exposes |
+| `ORCHESTRATOR__TTL__DEFAULT_TTL_SECONDS` | `1800` | Default sandbox lifetime |
+| `ORCHESTRATOR__CELERY__BROKER_URL` | `redis://127.0.0.1:6379/2` | Celery broker URL |
+| `ORCHESTRATOR__AUTH__BEARER_TOKEN` | *empty* | Optional bearer token for `/api/v1` |
 
 > 📖 **Full configuration reference** → [docs/configuration.md](docs/configuration.md)
 

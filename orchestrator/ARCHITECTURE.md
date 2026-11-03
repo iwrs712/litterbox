@@ -241,7 +241,7 @@ The project spreads state across Kubernetes and Redis:
 - `Ingress`
   HTTP exposure routing
 
-Sandbox Pods also mount the node-local envd binary from `/opt/litterbox/bin/sandbox-agent` as a read-only `hostPath`. `NetworkPolicy` objects that restrict sandbox ingress/egress are installed separately from `k8s/networkpolicy/`, not created by the orchestrator.
+Sandbox Pods also mount the node-local envd binary from `/opt/litterbox/bin/sandbox-agent` as a read-only `hostPath`. `NetworkPolicy` objects that restrict sandbox ingress/egress are installed separately as part of cluster setup, not created by the orchestrator.
 
 Most sandbox metadata is stored in deployment labels and annotations, not in an external database.
 
@@ -364,7 +364,7 @@ POST /sandboxes/{id}/suspend
 -> keep workspace PVC (manual suspend leaves TTL running)
 
 POST /sandboxes/{id}/resume
--> reject if business-locked
+-> reject if locked
 -> scale Deployment back to 1
 -> if suspended by TTL expiry, re-arm TTL from the stored ttl-seconds annotation
 ```
