@@ -8,7 +8,13 @@ from kubernetes.client import ApiException
 import pytest
 
 from orchestrator.config import Settings
-from orchestrator.domain.models import SandboxStatus, Template, WorkspaceConfig
+from orchestrator.domain.models import (
+    HostPathMount,
+    SandboxLifecycle,
+    SandboxStatus,
+    Template,
+    WorkspaceConfig,
+)
 from orchestrator.services.sandbox_crd import SandboxCRDService
 from orchestrator.services.sandboxes import SandboxService
 from orchestrator.utils import utcnow
@@ -59,7 +65,10 @@ class FakeCRDGateway:
         self.objects.pop(name, None)
 
     def wait_until_phase(self, name: str, phases: set[str], **kwargs) -> dict:
-        return self.get(name)
+        obj = self.objects[name]
+        state = (obj.get("spec") or {}).get("state")
+        obj.setdefault("status", {})["phase"] = "Paused" if state == "Paused" else "Running"
+        return deepcopy(obj)
 
 
 class FakeGateway:
@@ -105,18 +114,6 @@ class RecordingDispatcher:
 
     def dispatch(self, **kwargs) -> None:
         self.events.append(kwargs)
-
-
-class RecordingTTLQueue:
-    def __init__(self) -> None:
-        self.scheduled = []
-        self.unscheduled = []
-
-    def schedule(self, entry, expires_at) -> None:
-        self.scheduled.append((entry, expires_at))
-
-    def unschedule(self, entry) -> None:
-        self.unscheduled.append(entry)
 
 
 def crd_settings() -> Settings:
@@ -192,7 +189,6 @@ def build_sandbox_service(
     service.gateway = kube
     service.template_service = FakeTemplateService(template)
     service.webhook_dispatcher = dispatcher
-    service.ttl_queue = RecordingTTLQueue()
     service.settings = crd_settings()
     service.expose_service = None
     service.crd = SandboxCRDService(service.settings, kube, crd)
@@ -335,8 +331,10 @@ def test_set_ttl_and_renew_move_the_anchor() -> None:
     assert crd.objects["abc12345"]["spec"]["ttlSeconds"] == 60
     assert crd.objects["abc12345"]["spec"]["ttlAnchor"] is not None
 
-    service.renew_ttl("abc12345")
-    assert crd.objects["abc12345"]["spec"]["ttlAnchor"] != first_anchor
+    service.renew_ttl("abc12345", ttl_seconds=120, current_ttl=60)
+    renewed = crd.objects["abc12345"]["spec"]
+    assert renewed["ttlSeconds"] == 60
+    assert renewed["ttlAnchor"] != first_anchor
 
     service.set_ttl("abc12345", 0)
     assert crd.objects["abc12345"]["spec"]["ttlSeconds"] == 0
@@ -361,11 +359,127 @@ def test_create_sandbox_sets_running_status_and_dispatches_events() -> None:
     response = service.create_sandbox(template_id="ubuntu", ttl_seconds=600)
 
     assert response.id in crd.objects
-    assert response.status == SandboxStatus.CREATED
+    assert response.status == SandboxStatus.RUNNING
     assert kube.ready_selectors == [f"app={response.id},component=sandbox"]
     assert [event["event"].value for event in dispatcher.events] == [
         "sandbox_started",
         "sandbox_ready",
+    ]
+
+
+def test_suspend_resume_and_status_counts() -> None:
+    service, crd, _, _ = build_sandbox_service()
+    first = service.create_sandbox(template_id="ubuntu", ttl_seconds=600)
+    second = service.create_sandbox(template_id="ubuntu", ttl_seconds=600)
+
+    suspended = service.suspend_sandbox(first.id)
+    assert suspended.status == SandboxStatus.STOPPED
+    assert crd.objects[first.id]["spec"]["state"] == "Paused"
+    assert service.status_counts() == {
+        "total": 2,
+        "running": 1,
+        "stopped": 1,
+        "creating": 0,
+    }
+
+    resumed = service.resume_sandbox(first.id)
+    assert resumed.status == SandboxStatus.RUNNING
+    assert crd.objects[first.id]["spec"]["state"] == "Running"
+    assert service.status_counts()["running"] == 2
+
+    service.delete_sandbox(second.id)
+    assert second.id not in crd.objects
+
+
+def test_lock_and_unlock() -> None:
+    service, crd, _, _ = build_sandbox_service()
+    sandbox = service.create_sandbox(template_id="ubuntu", ttl_seconds=600)
+
+    service.lock_sandbox(sandbox.id)
+    assert service.get_sandbox(sandbox.id).locked is True
+    with pytest.raises(Exception, match="locked"):
+        service.resume_sandbox(sandbox.id)
+
+    service.unlock_sandbox(sandbox.id)
+    assert service.get_sandbox(sandbox.id).locked is False
+    assert service.resume_sandbox(sandbox.id).status == SandboxStatus.RUNNING
+
+
+def test_envd_disabled_preserves_template_lifecycle() -> None:
+    settings = crd_settings()
+    settings.envd.enabled = False
+    crd = FakeCRDGateway()
+    service = SandboxCRDService(settings, FakeGateway(), crd)
+    template = sample_template()
+    template.lifecycle = SandboxLifecycle.model_validate(
+        {
+            "postStart": {"exec": {"command": ["/bin/true"]}},
+            "preStop": {
+                "exec": {"command": ["/bin/false"]},
+                "terminationGracePeriodSeconds": 20,
+            },
+        }
+    )
+
+    body = service.build_object(
+        sandbox_id="abc12345",
+        template=template,
+        metadata={},
+        name="",
+        env=None,
+        pool_state="none",
+        ttl_seconds=600,
+        workspace=resolved_workspace(),
+    )
+
+    assert body["spec"]["envd"]["enabled"] is False
+    assert body["spec"]["lifecycle"]["postStart"] == ["/bin/true"]
+    assert body["spec"]["lifecycle"]["preStop"] == ["/bin/false"]
+    assert body["spec"]["lifecycle"]["terminationGracePeriodSeconds"] == 20
+
+
+def test_envd_injection_rejects_template_post_start() -> None:
+    service, _, _ = build_crd_service()
+    template = sample_template()
+    template.lifecycle = SandboxLifecycle.model_validate(
+        {"postStart": {"exec": {"command": ["/bin/true"]}}}
+    )
+
+    with pytest.raises(ValueError, match="conflicts with envd injection"):
+        service.build_object(
+            sandbox_id="abc12345",
+            template=template,
+            metadata={},
+            name="",
+            env=None,
+            pool_state="none",
+            ttl_seconds=600,
+            workspace=resolved_workspace(),
+        )
+
+
+def test_workspace_disabled_and_host_mounts() -> None:
+    service, _, _ = build_crd_service()
+    template = sample_template()
+    template.host_path_mounts = [
+        HostPathMount(host_path="/data", container_path="/mnt/data", read_only=True)
+    ]
+    workspace = resolved_workspace().model_copy(update={"enabled": False})
+
+    body = service.build_object(
+        sandbox_id="abc12345",
+        template=template,
+        metadata={},
+        name="",
+        env=None,
+        pool_state="none",
+        ttl_seconds=600,
+        workspace=workspace,
+    )
+
+    assert body["spec"]["workspace"]["enabled"] is False
+    assert body["spec"]["hostPathMounts"] == [
+        {"hostPath": "/data", "containerPath": "/mnt/data", "readOnly": True}
     ]
 
 

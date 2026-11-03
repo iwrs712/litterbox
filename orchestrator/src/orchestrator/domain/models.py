@@ -120,7 +120,7 @@ class WorkspaceConfigOverride(BaseModel):
 
 
 class WorkspaceConfig(BaseModel):
-    """Fully resolved workspace policy recorded on each Sandbox Deployment."""
+    """Fully resolved workspace policy recorded on each Sandbox resource."""
 
     model_config = ConfigDict(extra="forbid")
 

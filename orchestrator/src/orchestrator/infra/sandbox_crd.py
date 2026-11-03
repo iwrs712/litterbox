@@ -77,11 +77,8 @@ class SandboxCRDGateway:
             {"status": status},
         )
 
-    def delete(self, name: str, grace_period_seconds: int = 0) -> None:
-        body = client.V1DeleteOptions(
-            grace_period_seconds=grace_period_seconds,
-            propagation_policy="Foreground",
-        )
+    def delete(self, name: str) -> None:
+        body = client.V1DeleteOptions(propagation_policy="Foreground")
         try:
             self.api.delete_namespaced_custom_object(
                 self.group,

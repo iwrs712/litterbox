@@ -326,12 +326,16 @@ class SandboxCRDService:
             },
         )
 
-    def renew_ttl(self, sandbox_id: str) -> None:
+    def renew_ttl(self, sandbox_id: str, *, ttl_seconds: int, current_ttl: int) -> None:
+        # The configured TTL stays unchanged; only the next expiry moves. Keep
+        # the anchor consistent with ``expiresAt = anchor + current_ttl``.
+        effective_ttl = ttl_seconds or current_ttl
+        anchor = utcnow() + timedelta(seconds=effective_ttl - current_ttl)
         self.crd.patch(
             sandbox_id,
             {
                 "metadata": {"annotations": {"litterbox.io/updated-at": utcnow().isoformat()}},
-                "spec": {"ttlAnchor": utcnow().isoformat()},
+                "spec": {"ttlAnchor": anchor.isoformat()},
             },
         )
 
@@ -400,8 +404,8 @@ class SandboxCRDService:
             },
         )
 
-    def delete(self, sandbox_id: str, *, grace_period_seconds: int = 0) -> None:
-        self.crd.delete(sandbox_id, grace_period_seconds=grace_period_seconds)
+    def delete(self, sandbox_id: str) -> None:
+        self.crd.delete(sandbox_id)
 
     # ------------------------------------------------------------------
     # Reads

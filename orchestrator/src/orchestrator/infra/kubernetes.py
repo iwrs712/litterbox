@@ -36,7 +36,6 @@ class KubernetesGateway:
                 config.load_kube_config()
 
         self.core = self._build_core_api()
-        self.apps = client.AppsV1Api(self._build_api_client())
         self.networking = client.NetworkingV1Api(self._build_api_client())
         self.namespace = settings.kubernetes.namespace
         self._lock = threading.Lock()
@@ -109,48 +108,6 @@ class KubernetesGateway:
         except ApiException as exc:
             if exc.status != 404:
                 raise
-
-    def create_persistent_volume_claim(
-        self,
-        claim: client.V1PersistentVolumeClaim,
-    ) -> client.V1PersistentVolumeClaim:
-        return self.core.create_namespaced_persistent_volume_claim(self.namespace, claim)
-
-    def delete_persistent_volume_claim(self, name: str) -> None:
-        try:
-            self.core.delete_namespaced_persistent_volume_claim(name, self.namespace)
-        except ApiException as exc:
-            if exc.status != 404:
-                raise
-
-    def create_deployment(self, deployment: client.V1Deployment) -> client.V1Deployment:
-        return self.apps.create_namespaced_deployment(self.namespace, deployment)
-
-    def read_deployment(self, name: str) -> client.V1Deployment:
-        return self.apps.read_namespaced_deployment(name, self.namespace)
-
-    def patch_deployment(self, name: str, body: dict[str, Any]) -> client.V1Deployment:
-        return self.apps.patch_namespaced_deployment(name, self.namespace, body)
-
-    def replace_deployment(self, deployment: client.V1Deployment) -> client.V1Deployment:
-        return self.apps.replace_namespaced_deployment(deployment.metadata.name, self.namespace, deployment)
-
-    def list_deployments(self, label_selector: str = "") -> list[client.V1Deployment]:
-        return self.apps.list_namespaced_deployment(self.namespace, label_selector=label_selector).items
-
-    def delete_deployment(self, name: str, grace_period_seconds: int = 0) -> None:
-        body = client.V1DeleteOptions(
-            grace_period_seconds=grace_period_seconds,
-            propagation_policy="Foreground",
-        )
-        try:
-            self.apps.delete_namespaced_deployment(name, self.namespace, body=body)
-        except ApiException as exc:
-            if exc.status != 404:
-                raise
-
-    def scale_deployment(self, name: str, replicas: int) -> client.V1Deployment:
-        return self.patch_deployment(name, {"spec": {"replicas": replicas}})
 
     def list_pods(self, label_selector: str) -> list[client.V1Pod]:
         return self.core.list_namespaced_pod(self.namespace, label_selector=label_selector).items

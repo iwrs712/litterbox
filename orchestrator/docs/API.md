@@ -138,9 +138,9 @@ workspace 字段：
 workspace 生命周期：
 
 - 每个 sandbox 拥有独立 PVC。
-- `pause(keep_memory=False)` 或私有 API `suspend` 只将 Deployment 缩容到 0，保留 PVC。
-- `connect()` 或私有 API `resume` 会重新挂载原 PVC。
-- `kill()` 或私有 API `DELETE /api/v1/sandboxes/{id}` 会永久删除 PVC。
+- `pause(keep_memory=False)` 或私有 API `suspend` 将 `spec.state` 置为 `Paused`，控制器删除 Pod 并保留 PVC。
+- `connect()` 或私有 API `resume` 将 `spec.state` 置为 `Running`，控制器重新创建 Pod 并挂载原 PVC。
+- `kill()` 或私有 API `DELETE /api/v1/sandboxes/{id}` 删除 Sandbox CR，Pod 和 PVC 由 Kubernetes GC 回收。
 - Template 的 workspace 配置影响后续新建 sandbox，不会自动修改已有 PVC。
 
 ## 4. E2B 控制面接口
@@ -193,8 +193,8 @@ X-API-Key: <E2B_API_KEY>
 
 | state | 含义 |
 | --- | --- |
-| `running` | Deployment 有运行中的 Pod |
-| `paused` | Deployment 已缩容到 0，workspace 保留 |
+| `running` | Sandbox CR 有运行中的 Pod |
+| `paused` | Sandbox CR 已暂停，Pod 已删除，workspace 保留 |
 | `dead` | sandbox 已退出或不可用 |
 
 ### 4.3 连接并恢复
@@ -246,7 +246,7 @@ DELETE https://orchestrator.example.com/e2b/sandboxes/{sandbox_id}
 X-API-Key: <E2B_API_KEY>
 ```
 
-不可恢复，会删除 Deployment、workspace PVC、expose 对应的 Service/Ingress 和 TTL 调度记录。成功返回 `204 No Content`。
+不可恢复，会删除 Sandbox CR；Pod、workspace PVC 和 expose 对应的 Service/Ingress 由控制器和 GC 清理。成功返回 `204 No Content`。
 
 ## 5. envd 数据面
 

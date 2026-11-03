@@ -1,8 +1,8 @@
 # Litterbox sandbox controller
 
 A Kubernetes controller that turns a `Sandbox` custom resource into a Pod and a
-workspace PVC. It is the alternative to the legacy Deployment path in the
-Python orchestrator.
+workspace PVC. It is the sandbox lifecycle implementation used by the Python
+orchestrator.
 
 ```text
 orchestrator (API)                 controller                        Kubernetes
@@ -18,18 +18,15 @@ desired state (`spec.state`, `spec.ttlSeconds`, `spec.ttlAnchor`) and reads
 
 ## Why a controller
 
-The legacy path executes a chain of API calls in the request handler: create
-PVC, create Deployment, poll Pod readiness, patch annotations, write Redis TTL
-entries. Every step can fail independently, and a crash leaves orphaned PVCs
-or sandboxes stuck in `CREATING`.
+A request handler that creates a PVC and a workload, then polls readiness, can
+fail halfway through and leave orphaned objects or a sandbox stuck in
+`CREATING`. This controller is level-triggered instead:
 
-This controller is level-triggered instead:
-
-| Concern | Legacy API path | Controller |
+| Concern | Imperative handler | Controller |
 |---|---|---|
-| Create | synchronous PVC + Deployment + 100 ms readiness polling | one CR write; the controller converges asynchronously |
-| Reads | `list Deployments` on every request / dashboard refresh | informer cache, no API server read |
-| TTL expiry | Redis sorted set + single-threaded worker | reconcile compares `ttlAnchor + ttlSeconds` with now |
+| Create | synchronous PVC + workload + readiness polling | one CR write; the controller converges asynchronously |
+| Reads | list workloads on every request / dashboard refresh | informer cache, no API server read |
+| TTL expiry | external queue + single-threaded worker | reconcile compares `ttlAnchor + ttlSeconds` with now |
 | Crash recovery | no background repair | next reconcile repairs missing Pod/PVC |
 | Cleanup | manual delete order | `ownerReference` garbage collection |
 | Pod identity | Deployment + ReplicaSet + Pod | Pod only |
@@ -104,24 +101,15 @@ kubectl apply -f config/controller.yaml
 The manifests assume the controller and the orchestrator run in namespace
 `litterbox`. Adjust the ServiceAccounts/bindings for your environment.
 
-Enable the backend in the orchestrator:
+The orchestrator uses this API unconditionally. CRD coordinates can be
+overridden if needed:
 
 ```toml
 [sandbox]
-backend = "crd"
 # crd_group = "litterbox.io"
 # crd_version = "v1alpha1"
 # crd_plural = "sandboxes"
 ```
-
-or:
-
-```bash
-ORCHESTRATOR__SANDBOX__BACKEND=crd
-```
-
-The legacy `deployment` backend remains the default, so existing deployments
-are unaffected until the switch is explicit.
 
 ## Build and test
 

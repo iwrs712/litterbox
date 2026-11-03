@@ -41,9 +41,9 @@ ORCHESTRATOR_ROLE=api
 | 角色 | 进程 | 说明 |
 |---|---|---|
 | `api` | `uvicorn` | REST API、E2B 控制面和 envd 代理，需要 K8s + Redis 访问权限 |
-| `worker` | `celery` + TTL 子进程 | 消费 `pool_reconcile` 和 `webhook_delivery` 队列，同时在后台运行 TTL 清理子进程 |
+| `worker` | `celery` | 消费 `pool_reconcile` 和 `webhook_delivery` 队列 |
 
-> **注意**：`worker` 角色会在后台启动 TTL 子进程，再前台 exec celery。不需要单独部署 TTL 进程。
+> **注意**：沙箱 TTL 由 `sandbox-controller` 处理，不再有独立的 TTL worker 进程。
 
 ---
 
@@ -78,7 +78,7 @@ Kubernetes API 连接配置。
 | Key | 类型 | 默认值 | 说明 |
 |---|---|---|---|
 | `kubeconfig` | string | *空* | kubeconfig 文件路径。**为空时使用 in-cluster 模式**（读取 ServiceAccount token）。本地开发设为 `~/.kube/config` |
-| `namespace` | string | `"default"` | 沙箱资源（Deployment、Service、Ingress）创建的 namespace |
+| `namespace` | string | `"default"` | 沙箱资源（Sandbox CR、Pod、PVC、Service、Ingress）创建的 namespace |
 | `runtime_class` | string | `"kata-clh"` | Pod 的 [runtimeClassName](https://kubernetes.io/docs/concepts/containers/runtime-class/)。仅在集群中确实存在该 RuntimeClass 时生效；不存在时回退到集群默认 runtime |
 | `storage_class` | string | *空* | workspace 未单独配置 StorageClass 时的回退值 |
 | `image_pull_secret` | string | *空* | 拉取私有镜像的 `kubernetes.io/dockerconfigjson` Secret 名称。公开镜像留空 |
@@ -114,31 +114,27 @@ image_pull_secret = ""
 |---|---|---|---|
 | `max_sandboxes` | integer | `1000` | 沙箱数量上限配置。当前用于限制 envd Pod IP 缓存大小，未在创建路径强制拒绝 |
 | `base_domain` | string | `"example.com"` | HTTP 暴露的通配符域名。每个沙箱的暴露端口路由为 `<sandbox-id>.<base_domain>`。需要配置 `*.<base_domain>` 的 DNS 记录指向 Ingress Controller |
-| `backend` | `"deployment"` / `"crd"` | `"deployment"` | 沙箱生命周期后端。`deployment` 为旧的命令式路径；`crd` 写入 `Sandbox` 自定义资源，由 `sandbox-controller` 收敛 Pod 和 PVC |
-| `crd_group` | string | `"litterbox.io"` | `crd` 后端的 CRD API group |
-| `crd_version` | string | `"v1alpha1"` | `crd` 后端的 CRD version |
-| `crd_plural` | string | `"sandboxes"` | `crd` 后端的 CRD plural |
+| `crd_group` | string | `"litterbox.io"` | `Sandbox` CRD 的 API group |
+| `crd_version` | string | `"v1alpha1"` | `Sandbox` CRD 的 version |
+| `crd_plural` | string | `"sandboxes"` | `Sandbox` CRD 的 plural |
 
 **环境变量：**
 
 ```
 ORCHESTRATOR__SANDBOX__MAX_SANDBOXES=1000
 ORCHESTRATOR__SANDBOX__BASE_DOMAIN=sandbox.example.com
-ORCHESTRATOR__SANDBOX__BACKEND=crd
 ```
 
 ```toml
 [sandbox]
 max_sandboxes = 1000
 base_domain   = "example.com"
-backend       = "crd"
 ```
 
-> **`crd` 后端**需要在集群中安装 `controller/config/crd.yaml`、
-> `controller/config/rbac.yaml` 和 `controller/config/controller.yaml`，并确保
-> orchestrator 的 ServiceAccount 有 `sandboxes.litterbox.io` 的读写权限。
-> 切换到 `crd` 后，TTL 到期由控制器在 reconcile 中处理，不再使用 Redis TTL
-> 队列；工作区 PVC 与 Pod 通过 `ownerReference` 随 Sandbox 一起回收。
+> 沙箱生命周期由 `Sandbox` CRD 和 `sandbox-controller` 管理。集群中需要安装
+> `controller/config/crd.yaml`、`controller/config/rbac.yaml` 和
+> `controller/config/controller.yaml`，并确保 orchestrator 的 ServiceAccount
+> 有 `sandboxes.litterbox.io` 的读写权限。TTL 到期由控制器在 reconcile 中处理。
 
 ---
 
@@ -247,33 +243,21 @@ envd_version = "0.1.0"
 
 ## [ttl]
 
-TTL 生命周期管理配置。
+TTL 默认值配置。TTL 的到期判断和暂停由 `sandbox-controller` 完成。
 
 | Key | 类型 | 默认值 | 说明 |
 |---|---|---|---|
-| `default_ttl_seconds` | integer | `1800` | 沙箱未指定 TTL 时的默认存活时间（30 分钟） |
-| `min_ttl_seconds` | integer | `60` | 允许设置的最小 TTL（1 分钟） |
-| `max_ttl_seconds` | integer | `86400` | 允许设置的最大 TTL（24 小时） |
-| `queue_key` | string | `"orchestrator:ttl"` | Redis 有序集合的 key 名，存储 `(sandbox_id, expiry_timestamp)` 对。API 和 Worker 必须使用相同的值 |
-| `worker_poll_interval_seconds` | float | `1.0` | TTL worker 扫描过期沙箱的间隔。更低 = 更及时但 Redis 负载更高 |
+| `default_ttl_seconds` | integer | `1800` | 模板和池未指定 TTL 时的默认存活时间（30 分钟） |
 
 **环境变量：**
 
 ```
 ORCHESTRATOR__TTL__DEFAULT_TTL_SECONDS=1800
-ORCHESTRATOR__TTL__MIN_TTL_SECONDS=60
-ORCHESTRATOR__TTL__MAX_TTL_SECONDS=86400
-ORCHESTRATOR__TTL__QUEUE_KEY=orchestrator:ttl
-ORCHESTRATOR__TTL__WORKER_POLL_INTERVAL_SECONDS=1.0
 ```
 
 ```toml
 [ttl]
-default_ttl_seconds          = 1800
-min_ttl_seconds              = 60
-max_ttl_seconds              = 86400
-queue_key                    = "orchestrator:ttl"
-worker_poll_interval_seconds = 1.0
+default_ttl_seconds = 1800
 ```
 
 ---
@@ -335,7 +319,7 @@ webhook_queue   = "webhook_delivery"
 > | DB | 用途 |
 > |---|---|
 > | 0 | 通用缓存 |
-> | 1 | TTL 有序集合（`orchestrator:ttl`） |
+> | 1 | 预留 |
 > | 2 | Celery broker + result backend |
 
 ---
@@ -384,11 +368,7 @@ max_sandboxes = 100
 base_domain   = "localhost"
 
 [ttl]
-default_ttl_seconds          = 300      # 开发环境 5 分钟，加快清理
-min_ttl_seconds              = 30
-max_ttl_seconds              = 3600
-queue_key                    = "orchestrator:ttl"
-worker_poll_interval_seconds = 1.0
+default_ttl_seconds = 300      # 开发环境 5 分钟，加快清理
 
 [webhook]
 max_attempts = 3
@@ -439,11 +419,7 @@ domain       = "sandbox.example.com"
 envd_version = "0.1.0"
 
 [ttl]
-default_ttl_seconds          = 1800
-min_ttl_seconds              = 60
-max_ttl_seconds              = 86400
-queue_key                    = "orchestrator:ttl"
-worker_poll_interval_seconds = 1.0
+default_ttl_seconds = 1800
 
 [webhook]
 max_attempts = 5
@@ -493,15 +469,10 @@ bearer_token = "replace-with-strong-token"
 | `ORCHESTRATOR__E2B__ENVD_VERSION` | `e2b.envd_version` | `0.1.0` |
 | `ORCHESTRATOR__SANDBOX__MAX_SANDBOXES` | `sandbox.max_sandboxes` | `1000` |
 | `ORCHESTRATOR__SANDBOX__BASE_DOMAIN` | `sandbox.base_domain` | `example.com` |
-| `ORCHESTRATOR__SANDBOX__BACKEND` | `sandbox.backend` | `deployment` |
 | `ORCHESTRATOR__SANDBOX__CRD_GROUP` | `sandbox.crd_group` | `litterbox.io` |
 | `ORCHESTRATOR__SANDBOX__CRD_VERSION` | `sandbox.crd_version` | `v1alpha1` |
 | `ORCHESTRATOR__SANDBOX__CRD_PLURAL` | `sandbox.crd_plural` | `sandboxes` |
 | `ORCHESTRATOR__TTL__DEFAULT_TTL_SECONDS` | `ttl.default_ttl_seconds` | `1800` |
-| `ORCHESTRATOR__TTL__MIN_TTL_SECONDS` | `ttl.min_ttl_seconds` | `60` |
-| `ORCHESTRATOR__TTL__MAX_TTL_SECONDS` | `ttl.max_ttl_seconds` | `86400` |
-| `ORCHESTRATOR__TTL__QUEUE_KEY` | `ttl.queue_key` | `orchestrator:ttl` |
-| `ORCHESTRATOR__TTL__WORKER_POLL_INTERVAL_SECONDS` | `ttl.worker_poll_interval_seconds` | `1.0` |
 | `ORCHESTRATOR__WEBHOOK__MAX_ATTEMPTS` | `webhook.max_attempts` | `5` |
 | `ORCHESTRATOR__WEBHOOK__INTERVAL_MS` | `webhook.interval_ms` | `200` |
 | `ORCHESTRATOR__WEBHOOK__TIMEOUT_MS` | `webhook.timeout_ms` | `1000` |
