@@ -99,7 +99,7 @@ finally:
 
 ## 3. Template 与 workspace
 
-E2B SDK 的 `Sandbox.create()` 只选择已有 Template，不负责创建 Template。Template 和 workspace 策略通过私有管理 API 配置。
+E2B SDK 的 `Sandbox.create()` 只选择已有 Template，不负责创建 Template。SDK 另有 `Template.build()` / `from_dockerfile()` / `from_image()`，用于在 E2B 云端构建模板；Litterbox 未实现这组构建接口，模板通过私有管理 API 创建。
 
 ```http
 POST https://orchestrator.example.com/api/v1/templates
@@ -340,7 +340,7 @@ SDK 没有标准的 lock/unlock 方法，只能通过私有管理 API 使用。�
 | snapshots | 不支持 |
 | fork | 不支持 |
 | E2B volumes API | 不支持；workspace 通过 Template 配置 |
-| Template build | 不支持；使用已有容器镜像 |
+| Template build（`Template.build` / Dockerfile 构建） | 不支持；使用 `/api/v1/templates` 创建镜像模板 |
 | network allow/deny 策略 | 不支持；`allow_internet_access=false` 返回 `400` |
 | traffic proxy token | 返回 `null` |
 

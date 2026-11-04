@@ -17,13 +17,6 @@ Kubernetes-native. REST API and an E2B-compatible control plane. VM-level isolat
 
 Define a template, and Litterbox provisions an isolated sandbox on Kubernetes, manages its lifecycle, and exposes services on demand. Each sandbox runs in its own VM with a separate guest kernel, so untrusted code cannot reach the host or other workloads.
 
-```text
-POST /e2b/sandboxes       create a sandbox with the E2B SDK
-POST /api/v1/sandboxes    native REST control plane
-                          exec, files and PTY through envd
-                          suspend on TTL, delete on demand
-```
-
 <br>
 
 ## Features
@@ -170,7 +163,7 @@ npm install
 npm run dev:local     # uses .env.local; defaults to http://127.0.0.1:8080
 ```
 
-Open **http://localhost:5173**. The local script creates `.env.local` from `.env.local.example` (gitignored) and pins port `5173`; set `VITE_PORT` to change it.
+Open **http://localhost:5173**.
 
 <br>
 
@@ -183,28 +176,9 @@ To use it:
 - Set `ORCHESTRATOR__E2B__ENABLED=true` and an `ORCHESTRATOR__E2B__API_KEY` (empty falls back to the orchestrator bearer token).
 - Point `ORCHESTRATOR__E2B__DOMAIN` at a wildcard domain whose DNS and TLS certificate route to the orchestrator.
 - Install envd on the Kubernetes nodes and enable it with `ORCHESTRATOR__ENVD__ENABLED=true`.
-- Create the template first; `Sandbox.create` selects an existing template and does not build images.
+- Litterbox does not implement E2B template build APIs. Define templates through `POST /api/v1/templates`; `Sandbox.create` selects an existing template.
 
-```python
-from e2b import Sandbox
-
-config = {
-    "api_url": "https://orchestrator.example.com/e2b",
-    "domain": "sandbox.example.com",
-    "api_key": "<E2B_API_KEY>",
-}
-
-sandbox = Sandbox.create(template="ubuntu", timeout=300, **config)
-
-print(sandbox.commands.run("uname -a").stdout)
-sandbox.files.write("/workspace/notes.txt", "hello")
-print(sandbox.files.read("/workspace/notes.txt"))
-
-sandbox.pause(keep_memory=False)      # keep the workspace PVC
-sandbox = Sandbox.connect(sandbox.sandbox_id, **config)
-sandbox.set_timeout(600)
-sandbox.kill()                        # permanent; deletes the workspace PVC
-```
+See [Quick Start](#quick-start) for a runnable E2B SDK example.
 
 | Capability | Status |
 |---|---|
@@ -214,7 +188,7 @@ sandbox.kill()                        # permanent; deletes the workspace PVC
 | `set_timeout` | Supported; `0` disables expiry |
 | Commands, files, PTY | Supported through envd |
 
-Not supported: memory snapshots (`pause(keep_memory=True)`), fork, template builds, E2B volumes, and network allow/deny policies.
+Not supported: memory snapshots (`pause(keep_memory=True)`), fork, E2B template build APIs, E2B volumes, and network allow/deny policies.
 
 > The SDK context manager calls `kill()` on exit. Use `pause(keep_memory=False)` to keep the workspace.
 >

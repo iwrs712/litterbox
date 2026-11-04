@@ -17,13 +17,6 @@
 
 定义模板后，Litterbox 会在 Kubernetes 上创建隔离沙箱、管理生命周期并按需暴露服务。每个沙箱运行在独立虚拟机中，拥有自己的 Guest 内核，不可信代码无法影响宿主机或其他工作负载。
 
-```text
-POST /e2b/sandboxes       使用 E2B SDK 创建沙箱
-POST /api/v1/sandboxes    原生 REST 控制面
-                          通过 envd 执行命令、读写文件、开 PTY
-                          TTL 到期暂停，主动调用时永久删除
-```
-
 <br>
 
 ## 核心能力
@@ -171,7 +164,7 @@ npm install
 npm run dev:local     # 使用 .env.local，默认指向 http://127.0.0.1:8080
 ```
 
-访问 **http://localhost:5173**。本地脚本会从 `.env.local.example` 生成被 git 忽略的 `.env.local`，并固定端口 `5173`；可用 `VITE_PORT` 覆盖。
+访问 **http://localhost:5173**。
 
 <br>
 
@@ -184,28 +177,9 @@ Litterbox 实现了 E2B 控制面和 envd 数据面的兼容子集，可直接�
 - 设置 `ORCHESTRATOR__E2B__ENABLED=true` 和 `ORCHESTRATOR__E2B__API_KEY`（为空时回退到 orchestrator 的 Bearer Token）。
 - 将 `ORCHESTRATOR__E2B__DOMAIN` 指向一个通配域名，并让它的 DNS 和 TLS 证书路由到 orchestrator。
 - 在 Kubernetes 节点上安装 envd，并设置 `ORCHESTRATOR__ENVD__ENABLED=true`。
-- 先创建模板；`Sandbox.create` 只选择已有模板，不构建镜像。
+- Litterbox 未实现 E2B 的模板构建 API。模板请通过 `POST /api/v1/templates` 创建；`Sandbox.create` 只选择已有模板。
 
-```python
-from e2b import Sandbox
-
-config = {
-    "api_url": "https://orchestrator.example.com/e2b",
-    "domain": "sandbox.example.com",
-    "api_key": "<E2B_API_KEY>",
-}
-
-sandbox = Sandbox.create(template="ubuntu", timeout=300, **config)
-
-print(sandbox.commands.run("uname -a").stdout)
-sandbox.files.write("/workspace/notes.txt", "hello")
-print(sandbox.files.read("/workspace/notes.txt"))
-
-sandbox.pause(keep_memory=False)      # 保留 workspace PVC
-sandbox = Sandbox.connect(sandbox.sandbox_id, **config)
-sandbox.set_timeout(600)
-sandbox.kill()                        # 永久删除，同时删除 workspace PVC
-```
+完整可运行的 E2B 示例见 [快速开始](#快速开始)。
 
 | 能力 | 状态 |
 |---|---|
@@ -215,7 +189,7 @@ sandbox.kill()                        # 永久删除，同时删除 workspace PV
 | `set_timeout` | 支持，`0` 表示不超时 |
 | 命令、文件、PTY | 通过 envd 支持 |
 
-暂不支持：内存快照（`pause(keep_memory=True)`）、fork、模板构建、E2B volumes、网络 allow/deny 策略。
+暂不支持：内存快照（`pause(keep_memory=True)`）、fork、E2B 模板构建 API、E2B volumes、网络 allow/deny 策略。
 
 > SDK 的 context manager 退出时会调用 `kill()`。需要保留 workspace 时请显式调用 `pause(keep_memory=False)`。
 >
