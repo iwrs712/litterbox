@@ -2,7 +2,6 @@
 name = "orchestrator"
 version = "0.1.0"
 description = "Python orchestrator for Litterbox sandboxes"
-readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
   "celery[redis]>=5.4.0,<6.0.0",
