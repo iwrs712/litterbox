@@ -10,18 +10,16 @@ This guide covers setting up a local development environment for both the backen
 
 ```bash
 cd orchestrator
-
-# Create and activate virtual environment
-python -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
-
-# Install with dev dependencies
-pip install -e ".[dev]"
+uv sync --extra dev
 ```
 
 ### Configure
 
-The backend always loads `orchestrator/config.toml`. Edit it directly — there is no config-path environment variable — or override individual keys with `ORCHESTRATOR__*` variables:
+```bash
+cp config.example.toml config.toml
+```
+
+Then edit `config.toml` (or override individual keys with `ORCHESTRATOR__*` variables):
 
 ```toml
 [kubernetes]
@@ -40,17 +38,17 @@ export ORCHESTRATOR__KUBERNETES__NAMESPACE=litterbox-dev
 
 ### Run Services
 
-Each process runs in a **separate terminal** with the venv activated.
+Each process runs in a separate terminal.
 
 **API server:**
 ```bash
-uvicorn orchestrator.main:app --reload --port 8080
+uv run uvicorn orchestrator.main:app --reload --port 8080
 # Interactive docs: http://localhost:8080/docs
 ```
 
 **Celery worker** (webhook delivery):
 ```bash
-celery -A orchestrator.celery_app:celery_app worker \
+uv run celery -A orchestrator.celery_app:celery_app worker \
   -l info \
   -Q webhook_delivery \
   -n worker@%h
@@ -136,21 +134,10 @@ cd dashboard
 npm install          # or: pnpm install
 ```
 
-### Configure
-
-```bash
-cp .env.example .env
-```
-
-```dotenv
-VITE_API_BASE_URL=http://localhost:8080
-VITE_API_BEARER_TOKEN=
-```
-
 ### Run
 
 ```bash
-npm run dev
+npm run dev:local
 # http://localhost:5173
 
 # Type-check only (no emit)
@@ -163,6 +150,8 @@ npm run build
 npm run preview
 ```
 
+> `dev:local` creates `.env.local` from `.env.local.example` and points the dashboard at `http://127.0.0.1:8080` by default.
+>
 > The dashboard contains generated envd protobuf clients. `npm run build` regenerates them with `buf`; run `npm run generate:envd` after changing the proto definitions.
 
 

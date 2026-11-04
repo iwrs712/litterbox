@@ -102,16 +102,20 @@ flowchart LR
 | | 版本 |
 |---|---|
 | Kubernetes | 推荐 k3s |
-| Docker Compose | v2+ |
 | Python | 3.12+ |
 | Node.js | 18+ |
 
-### 1. 启动后端
+### 1. 安装控制器
+
+在集群中安装 `Sandbox` / `SandboxPool` CRD 和控制器，见 [沙箱控制器](controller/README.md)。
+
+### 2. 启动后端
 
 ```bash
 cd orchestrator
-cp .env.example .env      # 设置 KUBECONFIG、K8S_NAMESPACE、BASE_DOMAIN
-docker compose up --build
+cp config.example.toml config.toml   # 按需修改 kubeconfig / namespace
+uv sync
+uv run uvicorn orchestrator.main:app --host 0.0.0.0 --port 8080
 ```
 
 ```bash
@@ -120,8 +124,9 @@ curl http://localhost:8080/health
 ```
 
 > 如果设置了 `ORCHESTRATOR__AUTH__BEARER_TOKEN`，REST 请求需要携带 `Authorization: Bearer <token>`。
+> 只有 Webhook 和预热池需要 Celery 与 Redis。
 
-### 2. 创建模板
+### 3. 创建模板
 
 ```bash
 curl -s -X POST http://localhost:8080/api/v1/templates \
@@ -137,7 +142,7 @@ curl -s -X POST http://localhost:8080/api/v1/templates \
   }'
 ```
 
-### 3. 创建沙箱
+### 4. 创建沙箱
 
 ```bash
 pip install e2b
@@ -156,7 +161,7 @@ print(sandbox.sandbox_id)
 
 执行命令和读写文件需要 envd，见 [E2B 兼容](#e2b-兼容)。
 
-### 4. 启动控制台
+### 5. 启动控制台
 
 ```bash
 cd dashboard

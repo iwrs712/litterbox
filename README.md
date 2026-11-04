@@ -101,16 +101,20 @@ flowchart LR
 | | Version |
 |---|---|
 | Kubernetes | k3s recommended |
-| Docker Compose | v2+ |
 | Python | 3.12+ |
 | Node.js | 18+ |
 
-### 1. Start the backend
+### 1. Install the controller
+
+Install the `Sandbox` / `SandboxPool` CRDs and the controller in your cluster. See [Sandbox Controller](controller/README.md).
+
+### 2. Start the backend
 
 ```bash
 cd orchestrator
-cp .env.example .env      # set KUBECONFIG, K8S_NAMESPACE, BASE_DOMAIN
-docker compose up --build
+cp config.example.toml config.toml   # set kubeconfig / namespace if needed
+uv sync
+uv run uvicorn orchestrator.main:app --host 0.0.0.0 --port 8080
 ```
 
 ```bash
@@ -119,8 +123,9 @@ curl http://localhost:8080/health
 ```
 
 > If `ORCHESTRATOR__AUTH__BEARER_TOKEN` is set, add `Authorization: Bearer <token>` to REST calls.
+> Celery and Redis are only required for webhooks and warm pools.
 
-### 2. Create a template
+### 3. Create a template
 
 ```bash
 curl -s -X POST http://localhost:8080/api/v1/templates \
@@ -136,7 +141,7 @@ curl -s -X POST http://localhost:8080/api/v1/templates \
   }'
 ```
 
-### 3. Create a sandbox
+### 4. Create a sandbox
 
 ```bash
 pip install e2b
@@ -155,7 +160,7 @@ print(sandbox.sandbox_id)
 
 Command execution and file access require envd; see [E2B Compatibility](#e2b-compatibility).
 
-### 4. Start the dashboard
+### 5. Start the dashboard
 
 ```bash
 cd dashboard

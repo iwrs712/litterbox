@@ -1,0 +1,56 @@
+[server]
+host = "0.0.0.0"
+port = 8080
+
+[kubernetes]
+# Empty means in-cluster config, falling back to ~/.kube/config for local runs.
+kubeconfig = ""
+namespace = "default"
+# Set to "kata-clh" when the cluster has the Kata RuntimeClass installed.
+runtime_class = ""
+image_pull_secret = ""
+storage_class = ""
+
+[sandbox]
+max_sandboxes = 1000
+base_domain = "localhost"
+
+[workspace]
+enabled = true
+mount_path = "/workspace"
+default_size = "1Gi"
+storage_class = "local-path"
+
+[envd]
+# Set to true after installing the envd binary on every sandbox node.
+enabled = false
+version = "0.1.0"
+host_binary_path = "/opt/litterbox/bin/envd"
+container_binary_path = "/opt/litterbox/bin/envd"
+port = 49983
+connect_timeout_seconds = 3.0
+pod_ip_cache_ttl_seconds = 5.0
+
+[e2b]
+enabled = true
+# Empty falls back to the orchestrator bearer token.
+api_key = ""
+domain = "localhost"
+envd_version = "0.1.0"
+
+[ttl]
+default_ttl_seconds = 1800
+
+[webhook]
+max_attempts = 5
+interval_ms = 200
+timeout_ms = 1000
+
+[celery]
+broker_url = "redis://127.0.0.1:6379/2"
+result_backend = "redis://127.0.0.1:6379/2"
+webhook_queue = "webhook_delivery"
+
+[auth]
+# Empty disables bearer-token checks on /api/v1.
+bearer_token = ""

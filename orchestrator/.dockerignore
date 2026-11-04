@@ -14,6 +14,4 @@ tests
 THREAD_HANDOFF.md
 orchestrator_service.yaml
 redis_service.yaml
-docker-compose.yml
 .env
-.env.example

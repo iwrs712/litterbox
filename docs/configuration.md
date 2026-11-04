@@ -32,15 +32,14 @@
 通过 `entrypoint.sh` 的第一个参数或 `ORCHESTRATOR_ROLE` 环境变量选择角色。同一镜像，不同启动命令。
 
 ```bash
-# Docker / docker-compose
-command: ["api"]      # 或 "worker"
-# 或通过环境变量
-ORCHESTRATOR_ROLE=api
+# 设置 ORCHESTRATOR_ROLE 后启动对应进程
+ORCHESTRATOR_ROLE=api      # REST API / envd 代理
+ORCHESTRATOR_ROLE=worker   # Celery webhook worker
 ```
 
 | 角色 | 进程 | 说明 |
 |---|---|---|
-| `api` | `uvicorn` | REST API、E2B 控制面和 envd 代理，需要 K8s + Redis 访问权限 |
+| `api` | `uvicorn` | REST API、E2B 控制面和 envd 代理，需要 K8s 访问权限；Webhook/池功能需要 Redis |
 | `worker` | `celery` | 消费 `webhook_delivery` 队列；预热池由 `sandbox-controller` 维护 |
 
 > **注意**：沙箱 TTL 和预热池补水都由 `sandbox-controller` 处理。
@@ -303,8 +302,8 @@ Celery 任务队列配置。
 **环境变量：**
 
 ```
-ORCHESTRATOR__CELERY__BROKER_URL=redis://redis:6379/2
-ORCHESTRATOR__CELERY__RESULT_BACKEND=redis://redis:6379/2
+ORCHESTRATOR__CELERY__BROKER_URL=redis://127.0.0.1:6379/2
+ORCHESTRATOR__CELERY__RESULT_BACKEND=redis://127.0.0.1:6379/2
 ORCHESTRATOR__CELERY__WEBHOOK_QUEUE=webhook_delivery
 ```
 
@@ -350,7 +349,7 @@ bearer_token = ""
 
 ## 完整示例
 
-### 本地开发（docker-compose）
+### 本地开发（uvicorn）
 
 ```toml
 [server]
@@ -377,8 +376,8 @@ interval_ms  = 500
 timeout_ms   = 3000
 
 [celery]
-broker_url      = "redis://redis:6379/2"
-result_backend  = "redis://redis:6379/2"
+broker_url      = "redis://127.0.0.1:6379/2"
+result_backend  = "redis://127.0.0.1:6379/2"
 webhook_queue   = "webhook_delivery"
 
 [auth]
