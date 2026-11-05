@@ -1,0 +1,41 @@
+# The sandbox envd entry point, as a Traefik IngressRoute rather than a plain
+# Ingress. Two reasons:
+#
+# * the Ingress was deleted in favour of this route; a wildcard Host rule does
+#   not match in an IngressRoute (`Host(`*.example.com`)` is accepted but never
+#   matches), so the rule is a HostRegexp;
+# * an Ingress cannot carry `responseForwarding` at all — the ServersTransport
+#   CRD in Traefik 3.6 has no such field — and the sidecar serves chunked
+#   responses (files, terminal streams). The default 100ms flush interval made
+#   those run at ~0.35MB/s; a negative interval flushes every write.
+#
+# This route only affects traffic addressed to the public sandbox hostname. On a
+# self-hosted node the backend reaches the same proxy in-cluster instead (see
+# RUNLET_SANDBOX_PROXY_URL in the SaaS backend): the public hostname resolves to
+# the node's public IP, so data-plane traffic through it leaves and re-enters
+# through the WAN.
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: orchestrator-sandbox-envd
+  namespace: litterbox
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - kind: Rule
+      match: HostRegexp(`^.+\.sandbox\.runlet\.cn$`)
+      priority: 1000
+      services:
+        - name: orchestrator-service
+          namespace: litterbox
+          port: 8080
+          passHostHeader: true
+          responseForwarding:
+            flushInterval: "-1ms"
+  tls:
+    certResolver: letsencrypt
+    domains:
+      - main: sandbox.runlet.cn
+        sans:
+          - "*.sandbox.runlet.cn"
