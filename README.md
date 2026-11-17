@@ -53,54 +53,35 @@ Define a template, and Litterbox provisions an isolated sandbox on Kubernetes, m
 ## Architecture
 
 ```mermaid
-flowchart TB
-    subgraph Clients["Clients"]
-        direction LR
-        Dashboard["Dashboard"]
-        RestClient["REST clients"]
-        Sdk["E2B SDK"]
-    end
+%%{init: {"flowchart": {"curve": "stepBefore", "nodeSpacing": 40, "rankSpacing": 60}}}%%
+flowchart LR
+    Client["Clients<br/>Dashboard · REST · E2B SDK"]
 
-    subgraph Control["Orchestrator · FastAPI"]
-        direction LR
-        API["REST /api/v1 · E2B /e2b"]
+    subgraph Orchestrator["Orchestrator · FastAPI"]
+        API["Control API<br/>/api/v1 · /e2b<br/>TTL sweeper"]
         Proxy["envd proxy"]
     end
 
-    subgraph Async["Async"]
-        direction LR
+    subgraph Async["Webhook delivery"]
         Redis[("Redis")]
-        Worker["webhook worker"]
+        Worker["Celery worker"]
     end
 
-    subgraph K8s["Kubernetes · agent-sandbox"]
-        direction TB
-        CR["SandboxTemplate · SandboxWarmPool\nSandboxClaim"]
-        AS["agent-sandbox controllers\ncore + extensions"]
-        Pod["Sandbox Pod · Kata VM\nmain + envd"]
+    subgraph Cluster["Kubernetes · agent-sandbox"]
+        CRs["SandboxTemplate<br/>SandboxWarmPool<br/>SandboxClaim"]
+        Ctrl["agent-sandbox<br/>controllers"]
+        Pod["Sandbox Pod · Kata VM<br/>main + envd :49983"]
         PVC[("workspace PVC")]
-        Ingress["Service / Ingress"]
     end
 
     Hook["Webhook endpoints"]
 
-    Dashboard --> API
-    RestClient --> API
-    Sdk --> API
-    Sdk -.->|"envd"| Proxy
-    Dashboard -.->|"terminal"| Proxy
-
-    API -->|"writes CRs"| CR
-    CR -->|"reconciled by"| AS
-    AS -->|"creates"| Pod
-    Pod ---|"mounts"| PVC
-    API -->|"creates expose"| Ingress
-    Ingress --> Pod
-    Proxy -->|"Pod IP :49983"| Pod
-
-    API --> Redis
-    Redis --> Worker
-    Worker --> Hook
+    API --> Redis --> Worker --> Hook
+    Client -->|"control"| API
+    API -->|"write CRs"| CRs --> Ctrl -->|"create"| Pod
+    Client -->|"data"| Proxy
+    Proxy -->|"Pod IP"| Pod
+    Pod --- PVC
 ```
 
 - **Control plane.** `/api/v1` manages templates, pools, exposes, webhooks and sandbox lifecycle; `/e2b` exposes the same services to E2B clients. Template and webhook metadata live in ConfigMaps, and a sweeper in the API pauses sandboxes whose TTL expired.

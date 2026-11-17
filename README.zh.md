@@ -53,54 +53,35 @@
 ## 架构
 
 ```mermaid
-flowchart TB
-    subgraph Clients["客户端"]
-        direction LR
-        Dashboard["Dashboard"]
-        RestClient["REST 调用方"]
-        Sdk["E2B SDK"]
-    end
+%%{init: {"flowchart": {"curve": "stepBefore", "nodeSpacing": 40, "rankSpacing": 60}}}%%
+flowchart LR
+    Client["客户端<br/>Dashboard · REST · E2B SDK"]
 
-    subgraph Control["Orchestrator · FastAPI"]
-        direction LR
-        API["REST /api/v1 · E2B /e2b"]
+    subgraph Orchestrator["Orchestrator · FastAPI"]
+        API["控制 API<br/>/api/v1 · /e2b<br/>TTL 扫描"]
         Proxy["envd 代理"]
     end
 
-    subgraph Async["异步"]
-        direction LR
+    subgraph Async["Webhook 投递"]
         Redis[("Redis")]
-        Worker["Webhook worker"]
+        Worker["Celery worker"]
     end
 
-    subgraph K8s["Kubernetes · agent-sandbox"]
-        direction TB
-        CR["SandboxTemplate · SandboxWarmPool\nSandboxClaim"]
-        AS["agent-sandbox 控制器\ncore + extensions"]
-        Pod["沙箱 Pod · Kata VM\nmain + envd"]
+    subgraph Cluster["Kubernetes · agent-sandbox"]
+        CRs["SandboxTemplate<br/>SandboxWarmPool<br/>SandboxClaim"]
+        Ctrl["agent-sandbox<br/>控制器"]
+        Pod["沙箱 Pod · Kata VM<br/>main + envd :49983"]
         PVC[("workspace PVC")]
-        Ingress["Service / Ingress"]
     end
 
     Hook["Webhook 端点"]
 
-    Dashboard --> API
-    RestClient --> API
-    Sdk --> API
-    Sdk -.->|"envd"| Proxy
-    Dashboard -.->|"终端"| Proxy
-
-    API -->|"写入 CR"| CR
-    CR -->|"由控制器 reconcile"| AS
-    AS -->|"创建"| Pod
-    Pod ---|"挂载"| PVC
-    API -->|"创建暴露"| Ingress
-    Ingress --> Pod
-    Proxy -->|"Pod IP :49983"| Pod
-
-    API --> Redis
-    Redis --> Worker
-    Worker --> Hook
+    API --> Redis --> Worker --> Hook
+    Client -->|"控制"| API
+    API -->|"写入 CR"| CRs --> Ctrl -->|"创建"| Pod
+    Client -->|"数据"| Proxy
+    Proxy -->|"Pod IP"| Pod
+    Pod --- PVC
 ```
 
 - **控制面。** `/api/v1` 管理模板、池、端口暴露、Webhook 和沙箱生命周期；`/e2b` 把同一套服务暴露给 E2B 客户端。模板和 Webhook 元数据存在 ConfigMap 中，API 内的扫描任务负责暂停 TTL 到期的沙箱。
