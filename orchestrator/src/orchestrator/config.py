@@ -82,6 +82,7 @@ class E2BConfig(BaseModel):
 
 class TTLConfig(BaseModel):
     default_ttl_seconds: int = 1800
+    worker_poll_interval_seconds: float = 2.0
 
 
 class WebhookConfig(BaseModel):

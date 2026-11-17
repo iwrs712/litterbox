@@ -66,7 +66,7 @@ def service() -> SandboxCRDService:
     return SandboxCRDService(settings(), FakeGateway())
 
 
-def test_pod_template_uses_empty_dir_envd_and_ephemeral_storage() -> None:
+def test_pod_template_mounts_pvc_backed_workspace_and_envd() -> None:
     pod = service().build_pod_template(template(), workspace())
     spec = pod["spec"]
     container = spec["containers"][0]
@@ -75,12 +75,27 @@ def test_pod_template_uses_empty_dir_envd_and_ephemeral_storage() -> None:
     assert spec["runtimeClassName"] == "kata-clh"
     assert spec["nodeSelector"] == {"litterbox.io/envd-version": "0.1.0"}
     assert container["resources"]["limits"]["ephemeral-storage"] == "12Gi"
-    assert any(v.get("emptyDir", {}).get("sizeLimit") == "1Gi" for v in spec["volumes"])
-    assert not any("persistentVolumeClaim" in v for v in spec["volumes"])
+    assert {"name": "workspace", "mountPath": "/workspace"} in container["volumeMounts"]
+    # The controller injects the PVC-backed volume; the pod template must not
+    # carry an emptyDir or a claim of its own.
+    assert not any(v["name"] == "workspace" for v in spec["volumes"])
     assert container["lifecycle"]["postStart"]["exec"]["command"][0] == (
         "/opt/litterbox/envd/envd"
     )
     assert container["securityContext"]["appArmorProfile"]["type"] == "Unconfined"
+
+
+def test_ensure_template_creates_volume_claim_template() -> None:
+    svc = service()
+    svc.templates = FakeObjects()
+    svc.ensure_template(
+        template(), workspace().model_copy(update={"storage_class": "litterbox-workspace-lvm"})
+    )
+    body = svc.templates.saved[0]
+    claims = body["spec"]["volumeClaimTemplates"]
+    assert claims[0]["metadata"]["name"] == "workspace"
+    assert claims[0]["spec"]["resources"]["requests"]["storage"] == "1Gi"
+    assert claims[0]["spec"]["storageClassName"] == "litterbox-workspace-lvm"
 
 
 def test_claim_carries_env_ttl_and_pod_labels() -> None:
@@ -99,7 +114,9 @@ def test_claim_carries_env_ttl_and_pod_labels() -> None:
     assert spec["env"] == [
         {"containerName": "main", "name": "RUNTIME", "value": "on"}
     ]
-    assert spec["lifecycle"]["shutdownPolicy"] == "Delete"
+    assert "lifecycle" not in spec
+    assert claim["metadata"]["annotations"]["litterbox.io/ttl-seconds"] == "120"
+    assert "litterbox.io/ttl-anchor" in claim["metadata"]["annotations"]
     assert spec["additionalPodMetadata"]["labels"]["litterbox.io/sandbox-id"] == "abc12345"
     assert claim["metadata"]["labels"]["litterbox.io/pool-state"] == "allocated"
 

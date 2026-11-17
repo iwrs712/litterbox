@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import logging
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -36,13 +37,33 @@ def _is_cors_preflight(request: Request) -> bool:
     )
 
 
+async def _ttl_loop(container: Container) -> None:
+    interval = max(container.settings.ttl.worker_poll_interval_seconds, 0.5)
+    while True:
+        try:
+            suspended = await asyncio.to_thread(
+                container.sandbox_service.suspend_expired
+            )
+            if suspended:
+                logger.info("paused %s expired sandbox(es)", suspended)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001
+            logger.exception("TTL sweep failed")
+        await asyncio.sleep(interval)
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     container = build_container()
     app.state.container = container
+    ttl_task = asyncio.create_task(_ttl_loop(container))
     try:
         yield
     finally:
+        ttl_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await ttl_task
         envd_proxy_service = getattr(container, "envd_proxy_service", None)
         close_envd_proxy = getattr(envd_proxy_service, "aclose", None)
         if close_envd_proxy is not None:

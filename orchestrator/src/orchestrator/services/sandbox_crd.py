@@ -88,6 +88,7 @@ class SandboxCRDService:
                 "networkPolicyManagement": "Unmanaged",
                 "service": False,
                 "podTemplate": self.build_pod_template(template, workspace),
+                **self.build_volume_claim_templates(workspace),
             },
         }
         try:
@@ -223,11 +224,6 @@ class SandboxCRDService:
         ]
         if claim_env:
             spec["env"] = claim_env
-        if effective_ttl > 0 and anchor is not None:
-            spec["lifecycle"] = {
-                "shutdownTime": _iso(anchor + timedelta(seconds=effective_ttl)),
-                "shutdownPolicy": "Delete",
-            }
 
         return {
             "apiVersion": f"{EXTENSIONS_GROUP}/{API_VERSION}",
@@ -270,21 +266,14 @@ class SandboxCRDService:
             "litterbox.io/ttl-anchor": anchor.isoformat() if ttl_seconds > 0 else None,
             "litterbox.io/updated-at": utcnow().isoformat(),
         }
-        lifecycle: dict[str, Any] | None = None
-        if ttl_seconds > 0:
-            lifecycle = {
-                "shutdownTime": _iso(anchor + timedelta(seconds=ttl_seconds)),
-                "shutdownPolicy": "Delete",
-            }
         self.claims.patch(
             sandbox_id,
-            {"metadata": {"annotations": annotations}, "spec": {"lifecycle": lifecycle}},
+            {"metadata": {"annotations": annotations}},
         )
 
     def renew_ttl(self, sandbox_id: str, *, ttl_seconds: int, current_ttl: int) -> None:
         effective_ttl = ttl_seconds or current_ttl
         anchor = utcnow() + timedelta(seconds=effective_ttl - current_ttl)
-        expires = anchor + timedelta(seconds=current_ttl)
         self.claims.patch(
             sandbox_id,
             {
@@ -293,13 +282,7 @@ class SandboxCRDService:
                         "litterbox.io/ttl-anchor": anchor.isoformat(),
                         "litterbox.io/updated-at": utcnow().isoformat(),
                     }
-                },
-                "spec": {
-                    "lifecycle": {
-                        "shutdownTime": _iso(expires),
-                        "shutdownPolicy": "Delete",
-                    }
-                },
+                }
             },
         )
 
@@ -320,15 +303,9 @@ class SandboxCRDService:
             "litterbox.io/updated-at": utcnow().isoformat(),
             "litterbox.io/ttl-suspended-at": None,
         }
-        spec: dict[str, Any] = {}
         if ttl_seconds > 0:
-            anchor = utcnow()
-            annotations["litterbox.io/ttl-anchor"] = anchor.isoformat()
-            spec["lifecycle"] = {
-                "shutdownTime": _iso(anchor + timedelta(seconds=ttl_seconds)),
-                "shutdownPolicy": "Delete",
-            }
-        self.claims.patch(sandbox_id, {"metadata": {"annotations": annotations}, "spec": spec})
+            annotations["litterbox.io/ttl-anchor"] = utcnow().isoformat()
+        self.claims.patch(sandbox_id, {"metadata": {"annotations": annotations}})
 
     def lock(self, sandbox_id: str) -> None:
         now = utcnow().isoformat()
@@ -405,18 +382,29 @@ class SandboxCRDService:
     # Translation helpers
     # ------------------------------------------------------------------
 
+    def build_volume_claim_templates(self, workspace: WorkspaceConfig) -> dict[str, Any]:
+        if not workspace.enabled:
+            return {}
+        claim_spec: dict[str, Any] = {
+            "accessModes": ["ReadWriteOnce"],
+            "resources": {"requests": {"storage": workspace.size}},
+        }
+        if workspace.storage_class:
+            claim_spec["storageClassName"] = workspace.storage_class
+        return {
+            "volumeClaimTemplates": [
+                {"metadata": {"name": "workspace"}, "spec": claim_spec}
+            ]
+        }
+
     def build_pod_template(self, template: Template, workspace: WorkspaceConfig) -> dict[str, Any]:
         volumes: list[dict[str, Any]] = []
         volume_mounts: list[dict[str, Any]] = []
         ports: list[dict[str, Any]] = []
 
         if workspace.enabled:
-            volumes.append(
-                {
-                    "name": "workspace",
-                    "emptyDir": {"sizeLimit": workspace.size},
-                }
-            )
+            # The Sandbox controller injects a PVC-backed volume named after the
+            # volumeClaimTemplate; only the mount belongs in the pod template.
             volume_mounts.append({"name": "workspace", "mountPath": workspace.mount_path})
 
         envd_enabled = self.settings.envd.enabled

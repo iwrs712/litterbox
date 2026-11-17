@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 
 from orchestrator.config import Settings
@@ -21,7 +22,10 @@ from orchestrator.infra.sandbox_crd import SandboxCRDGateway
 from orchestrator.services.sandbox_crd import SandboxCRDService
 from orchestrator.services.templates import TemplateService
 from orchestrator.services.webhooks import WebhookDispatcher
-from orchestrator.utils import is_valid_label_part, short_id
+from orchestrator.utils import is_valid_label_part, short_id, utcnow
+
+
+logger = logging.getLogger(__name__)
 
 
 class SandboxResumeLockedError(RuntimeError):
@@ -133,6 +137,28 @@ class SandboxService:
         except Exception:
             template = None
         return SandboxResponse.from_sandbox(sandbox, template)
+
+    def suspend_expired(self) -> int:
+        """Pause sandboxes whose TTL passed. Pods go away; PVCs stay."""
+        now = utcnow()
+        suspended = 0
+        for sandbox in self.crd.list("component=sandbox"):
+            if sandbox.terminating or sandbox.status == SandboxStatus.STOPPED:
+                continue
+            if sandbox.ttl_seconds <= 0 or sandbox.expires_at is None:
+                continue
+            if sandbox.expires_at > now:
+                continue
+            try:
+                cr = self.crd.get_cr(sandbox.id)
+                annotations = (cr.get("metadata") or {}).get("annotations") or {}
+                if annotations.get("litterbox.io/ttl-suspended-at"):
+                    continue
+                self.crd.suspend(sandbox.id, ttl_expired=True)
+                suspended += 1
+            except Exception:  # noqa: BLE001
+                logger.exception("failed to suspend expired sandbox %s", sandbox.id)
+        return suspended
 
     def list_sandboxes(self, opts: QueryOptions) -> SandboxListResponse:
         label_selector = self._sandbox_label_selector(opts)

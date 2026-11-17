@@ -35,9 +35,14 @@ kubectl -n agent-sandbox-system rollout restart deploy/agent-sandbox-controller
 
 ## Semantics
 
-- `/workspace` is an `emptyDir` with `sizeLimit` — sandboxes are disposable.
-- TTL is `SandboxClaim.spec.lifecycle.shutdownTime`; expiry deletes the claim,
-  sandbox and pod.
+- `/workspace` is a PVC created from `SandboxTemplate.spec.volumeClaimTemplates`
+  (`workspace-<sandbox-name>`, storage class from the template). The PVC
+  survives pod restarts, suspend and TTL expiry.
+- TTL is enforced by the orchestrator: on expiry it pauses the sandbox
+  (`Sandbox.spec.operatingMode: Suspended`). The Pod is deleted, the PVC and
+  claim stay. Resume creates a new Pod mounted on the same PVC.
 - Pause/resume maps to `Sandbox.spec.operatingMode`.
+- Templates with `workspace.enabled=false` get no PVC; TTL pause then simply
+  recreates an empty filesystem on resume.
 - The controller sets `automountServiceAccountToken: false` and the container
   carries an `ephemeral-storage` limit.
