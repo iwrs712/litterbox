@@ -16,7 +16,18 @@ from orchestrator.domain.models import (
 from orchestrator.services.pools import PoolService
 
 
-def test_allocate_sandbox_rejects_env_when_pool_enabled() -> None:
+def test_allocate_sandbox_passes_env_even_when_pool_enabled() -> None:
+    class DummySandboxService:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+
+        def create_sandbox(self, **kwargs):
+            self.calls.append(kwargs)
+            return "created"
+
+        def get_template(self, _template_id):
+            return SimpleNamespace(ttl_seconds=120)
+
     now = datetime.now(tz=UTC)
     pool = Pool(
         template_id="tpl-1",
@@ -27,16 +38,31 @@ def test_allocate_sandbox_rejects_env_when_pool_enabled() -> None:
         created_at=now,
         updated_at=now,
     )
-
+    sandbox_service = DummySandboxService()
     service = object.__new__(PoolService)
     service.repository = SimpleNamespace(get=lambda _template_id: pool)
+    service.sandbox_service = sandbox_service
 
     request = AllocateSandboxRequest(template_id="tpl-1", env=["FEATURE_FLAG=true"])
-    with pytest.raises(ValueError, match="env override is not supported"):
-        service.allocate_sandbox(request)
+    result = service.allocate_sandbox(request)
+
+    assert result == "created"
+    assert sandbox_service.calls[0]["env"] == ["FEATURE_FLAG=true"]
+    assert sandbox_service.calls[0]["pool_state"] == "allocated"
 
 
-def test_allocate_sandbox_rejects_workspace_override_when_pool_enabled() -> None:
+def test_allocate_sandbox_passes_workspace_override_even_when_pool_enabled() -> None:
+    class DummySandboxService:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+
+        def create_sandbox(self, **kwargs):
+            self.calls.append(kwargs)
+            return "created"
+
+        def get_template(self, _template_id):
+            return SimpleNamespace(ttl_seconds=120)
+
     now = datetime.now(tz=UTC)
     pool = Pool(
         template_id="tpl-1",
@@ -47,15 +73,20 @@ def test_allocate_sandbox_rejects_workspace_override_when_pool_enabled() -> None
         created_at=now,
         updated_at=now,
     )
+    sandbox_service = DummySandboxService()
     service = object.__new__(PoolService)
     service.repository = SimpleNamespace(get=lambda _template_id: pool)
+    service.sandbox_service = sandbox_service
 
     request = AllocateSandboxRequest(
         template_id="tpl-1",
         workspace=WorkspaceConfigOverride(size="2Gi"),
     )
-    with pytest.raises(ValueError, match="workspace override is not supported"):
-        service.allocate_sandbox(request)
+    result = service.allocate_sandbox(request)
+
+    assert result == "created"
+    assert sandbox_service.calls[0]["workspace"] == request.workspace
+    assert sandbox_service.calls[0]["pool_state"] == "allocated"
 
 
 def test_allocate_sandbox_passes_env_to_direct_create() -> None:

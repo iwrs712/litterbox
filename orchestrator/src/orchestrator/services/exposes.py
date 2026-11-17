@@ -54,7 +54,10 @@ class ServiceExposeService:
             ),
             spec=client.V1ServiceSpec(
                 type="ClusterIP" if req.protocol == ProtocolType.HTTP else "NodePort",
-                selector={"component": "sandbox", "app": req.sandbox_id},
+                selector={
+                    "component": "sandbox",
+                    "litterbox.io/sandbox-id": req.sandbox_id,
+                },
                 ports=[
                     client.V1ServicePort(
                         name="service-port",

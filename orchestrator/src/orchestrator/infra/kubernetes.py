@@ -126,14 +126,14 @@ class KubernetesGateway:
         raise TimeoutError(f"timed out waiting for pod ready: {label_selector} ({last_error})")
 
     def get_first_running_pod(self, sandbox_id: str) -> client.V1Pod:
-        for pod in self.list_pods(f"app={sandbox_id},component=sandbox"):
+        for pod in self.list_pods(f"litterbox.io/sandbox-id={sandbox_id},component=sandbox"):
             if pod.status.phase == "Running":
                 return pod
         raise SandboxNotRunningError(f"sandbox {sandbox_id} is not running")
 
     def get_ready_pod_ip(self, sandbox_id: str) -> str:
         ready_pod_without_ip = False
-        for pod in self.list_pods(f"app={sandbox_id},component=sandbox"):
+        for pod in self.list_pods(f"litterbox.io/sandbox-id={sandbox_id},component=sandbox"):
             if pod.metadata.deletion_timestamp is not None or pod.status.phase != "Running":
                 continue
             statuses = pod.status.container_statuses or []

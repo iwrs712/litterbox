@@ -30,6 +30,8 @@ class SandboxConfig(BaseModel):
     crd_group: str = "litterbox.io"
     crd_version: str = "v1alpha1"
     crd_plural: str = "sandboxes"
+    ephemeral_storage_request: str = "256Mi"
+    ephemeral_storage_limit: str = "12Gi"
 
 
 class WorkspaceConfig(BaseModel):

@@ -7,6 +7,7 @@ from orchestrator.domain.models import (
     CreatePoolRequest,
     Pool,
     PoolListResponse,
+    PoolState,
     PoolStatus,
     SandboxResponse,
     UpdatePoolRequest,
@@ -40,16 +41,16 @@ class PoolService:
         template = self.template_service.get_template(template_id)
         if self.repository.get(template_id) is not None:
             raise ValueError(f"pool already exists for template {template_id}")
+        self.sandbox_service.ensure_template(template)
         now = utcnow()
         target_ready = req.target_ready or req.min_ready
-        workspace = self.sandbox_service._resolve_workspace(template, None)
         pool = Pool(
             template_id=template_id,
             enabled=target_ready > 0,
             min_ready=req.min_ready,
             target_ready=target_ready,
             max_creating=req.max_creating,
-            sandbox_template=self.sandbox_service.build_pool_template(template, workspace),
+            sandbox_template={},
             created_at=now,
             updated_at=now,
         )
@@ -92,9 +93,6 @@ class PoolService:
     def delete_pool(self, template_id: str) -> None:
         if self.repository.get(template_id) is None:
             return
-        # Allocated sandboxes must survive the pool; the controller also
-        # detaches them, but do it before the CR disappears.
-        self.sandbox_service.detach_pool_sandboxes(template_id)
         self.repository.delete(template_id)
 
     def list_pools(self) -> PoolListResponse:
@@ -107,58 +105,27 @@ class PoolService:
         from orchestrator.services.metrics import sandbox_metrics  # 延迟导入，避免循环
 
         pool = self.repository.get(req.template_id)
-        if req.env and pool and pool.enabled:
-            raise ValueError(
-                "env override is not supported when a warm pool is enabled for this template"
-            )
-        if req.workspace is not None and pool and pool.enabled:
-            raise ValueError(
-                "workspace override is not supported when a warm pool is enabled for this template"
-            )
-
+        pool_state = PoolState.ALLOCATED if pool and pool.enabled else PoolState.NONE
         ttl_seconds = self._pool_ttl_seconds(req.template_id)
-        if pool and pool.enabled:
-            _t0 = time.perf_counter()
-            claimed = self.sandbox_service.claim_pool_sandbox(
-                pool_name=req.template_id,
-                name=req.name,
-                metadata=req.metadata,
-                ttl_seconds=ttl_seconds,
-            )
-            if claimed is not None:
-                sandbox_metrics.record_create(
-                    template_id=req.template_id,
-                    duration=time.perf_counter() - _t0,
-                    success=True,
-                    source="pool",
-                )
-                self.sandbox_service.dispatch_running_events(claimed.id)
-                return claimed
-            # No warm sandbox available: create directly and let the pool
-            # controller replenish in the background.
-            sandbox = self.sandbox_service.create_sandbox(
-                template_id=req.template_id,
-                name=req.name,
-                metadata=req.metadata,
-                env=req.env,
-                wait_ready=True,
-                dispatch_events=True,
-                ttl_seconds=ttl_seconds,
-                workspace=req.workspace,
-            )
-            self.repository.request_reconcile(req.template_id)
-            return sandbox
-
-        return self.sandbox_service.create_sandbox(
+        _t0 = time.perf_counter()
+        sandbox = self.sandbox_service.create_sandbox(
             template_id=req.template_id,
             name=req.name,
             metadata=req.metadata,
             env=req.env,
+            pool_state=pool_state,
             wait_ready=True,
             dispatch_events=True,
             ttl_seconds=ttl_seconds,
             workspace=req.workspace,
         )
+        sandbox_metrics.record_create(
+            template_id=req.template_id,
+            duration=time.perf_counter() - _t0,
+            success=True,
+            source="pool" if pool_state != PoolState.NONE else "direct",
+        )
+        return sandbox
 
     def release_sandbox(self, sandbox_id: str) -> None:
         self.sandbox_service.delete_sandbox(sandbox_id)

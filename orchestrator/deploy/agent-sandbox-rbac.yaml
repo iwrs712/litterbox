@@ -1,0 +1,32 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: orchestrator-agent-sandbox-role
+  namespace: default
+rules:
+  - apiGroups: ["agents.x-k8s.io"]
+    resources: ["sandboxes", "sandboxes/status"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["extensions.agents.x-k8s.io"]
+    resources:
+      - sandboxclaims
+      - sandboxclaims/status
+      - sandboxtemplates
+      - sandboxtemplates/status
+      - sandboxwarmpools
+      - sandboxwarmpools/status
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: orchestrator-agent-sandbox-binding
+  namespace: default
+subjects:
+  - kind: ServiceAccount
+    name: orchestrator-service
+    namespace: litterbox
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: orchestrator-agent-sandbox-role

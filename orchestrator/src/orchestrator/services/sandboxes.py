@@ -89,57 +89,42 @@ class SandboxService:
         pod = None
         # 只对用户直接等待的路径（wait_ready=True）记录指标；
         # Pool 预热使用 wait_ready=False，不计入用户体验耗时。
-        if wait_ready:
-            _t0 = time.perf_counter()
-            _success = False
+        try:
+            if wait_ready:
+                _t0 = time.perf_counter()
+                _success = False
+                try:
+                    pod = self.gateway.wait_for_pod_ready(
+                        f"litterbox.io/sandbox-id={sandbox_id},component=sandbox"
+                    )
+                    _success = True
+                finally:
+                    sandbox_metrics.record_create(
+                        template_id=template_id,
+                        duration=time.perf_counter() - _t0,
+                        success=_success,
+                        source="direct",
+                    )
+                # The Pod is already serving; a status update that arrives a moment
+                # later must not make the create response look unfinished.
+                self.crd.wait_until_running(sandbox_id)
+        except Exception:
+            # A claim that never became ready must not stay behind as an
+            # unclaimed sandbox the caller cannot see.
             try:
-                pod = self.gateway.wait_for_pod_ready(
-                    f"app={sandbox_id},component=sandbox"
-                )
-                _success = True
-            finally:
-                sandbox_metrics.record_create(
-                    template_id=template_id,
-                    duration=time.perf_counter() - _t0,
-                    success=_success,
-                    source="direct",
-                )
-            # The Pod is already serving; a status update that arrives a moment
-            # later must not make the create response look unfinished.
-            self.crd.wait_until_running(sandbox_id)
+                self.crd.delete(sandbox_id)
+            except Exception:  # noqa: BLE001
+                pass
+            raise
 
         sandbox = self.get_sandbox(sandbox_id)
         if dispatch_events and pool_state == PoolState.NONE:
             self._dispatch_running_events(sandbox, template, pod)
         return sandbox
 
-    def build_pool_template(
-        self,
-        template: Template,
-        workspace: WorkspaceConfig,
-    ) -> dict:
-        return self.crd.build_pool_template(template=template, workspace=workspace)
-
-    def claim_pool_sandbox(
-        self,
-        *,
-        pool_name: str,
-        name: str,
-        metadata: dict[str, str],
-        ttl_seconds: int,
-    ) -> SandboxResponse | None:
-        sandbox = self.crd.claim_available(
-            pool_name,
-            name=name,
-            metadata=metadata,
-            ttl_seconds=ttl_seconds,
-        )
-        if sandbox is None:
-            return None
-        return self.get_sandbox(sandbox.id)
-
-    def detach_pool_sandboxes(self, pool_name: str) -> None:
-        self.crd.detach_pool_allocated(pool_name)
+    def ensure_template(self, template: Template) -> None:
+        workspace = self._resolve_workspace(template, None)
+        self.crd.ensure_template(template, workspace)
 
     def get_sandbox(self, sandbox_id: str) -> SandboxResponse:
         sandbox = self.crd.get(sandbox_id)
@@ -265,7 +250,9 @@ class SandboxService:
             )
         ttl_seconds = int((cr.get("spec") or {}).get("ttlSeconds") or 0)
         self.crd.resume(sandbox_id, ttl_seconds=ttl_seconds)
-        self.gateway.wait_for_pod_ready(f"app={sandbox_id},component=sandbox")
+        self.gateway.wait_for_pod_ready(
+            f"litterbox.io/sandbox-id={sandbox_id},component=sandbox"
+        )
         self.crd.wait_until_running(sandbox_id)
         return self.get_sandbox(sandbox_id)
 

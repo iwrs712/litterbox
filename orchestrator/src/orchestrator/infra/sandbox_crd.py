@@ -18,13 +18,21 @@ class SandboxCRDGateway:
     and reads the controller-written status back.
     """
 
-    def __init__(self, gateway: KubernetesGateway, settings: Settings) -> None:
+    def __init__(
+        self,
+        gateway: KubernetesGateway,
+        settings: Settings,
+        *,
+        group: str | None = None,
+        version: str | None = None,
+        plural: str | None = None,
+    ) -> None:
         self.gateway = gateway
         self.settings = settings
         self.namespace = gateway.namespace
-        self.group = settings.sandbox.crd_group
-        self.version = settings.sandbox.crd_version
-        self.plural = settings.sandbox.crd_plural
+        self.group = group or settings.sandbox.crd_group
+        self.version = version or settings.sandbox.crd_version
+        self.plural = plural or settings.sandbox.crd_plural
         self.api = client.CustomObjectsApi(
             client.ApiClient(client.Configuration.get_default_copy())
         )
