@@ -19,7 +19,7 @@ The codebase is intentionally small and mostly layered:
 - `services/` contains business orchestration, plus the envd proxy and E2B adapter
 - `infra/` wraps Kubernetes and Redis-backed persistence primitives
 - `domain/models.py` defines the API and internal data contracts; `domain/e2b_models.py` defines the E2B wire format
-- the Go `sandbox-controller` (top-level `controller/`) owns Pod, PVC and TTL reconciliation
+- upstream `agent-sandbox` controllers own Pod, PVC and warm-pool reconciliation; the orchestrator writes `SandboxClaim` / `SandboxTemplate` / `SandboxWarmPool` objects and pauses sandboxes whose TTL expired
 
 ## Runtime Topology
 
@@ -28,9 +28,9 @@ The project runs in two process roles:
 - `api`: FastAPI + Uvicorn
 - `worker`: Celery worker for webhook delivery
 
-There is no pool reconcile task and no TTL process. Warm-pool supply is
-maintained by the `SandboxPool` controller; TTL is maintained by the
-`Sandbox` controller.
+Warm-pool supply is maintained by the upstream `agent-sandbox` controllers.
+TTL is enforced by a sweeper in the `api` process: on expiry it sets the
+sandbox to `operatingMode: Suspended`, which deletes the Pod but keeps the PVC.
 
 ```mermaid
 flowchart LR
@@ -42,7 +42,7 @@ flowchart LR
     Services --> CM["ConfigMap-backed metadata"]
     Services --> Redis["Redis"]
     Services --> Expose["Services / Ingresses"]
-    CRD --> Controller["sandbox-controller"]
+    CRD --> Controller["agent-sandbox controller"]
     Controller --> Pods["Sandbox Pod + workspace PVC"]
     Proxy --> Pods
     Services --> Celery["Celery Tasks"]
@@ -75,7 +75,7 @@ envd router proxies data-plane traffic to `PodIP:49983`.
 
 `container.py` builds one `Container` per process:
 
-- `KubernetesGateway` and `SandboxCRDGateway`
+- `KubernetesGateway` and CRD gateways for `Sandbox` / `SandboxClaim` / `SandboxTemplate` / `SandboxWarmPool`
 - ConfigMap-backed template and webhook repositories, plus `SandboxPoolRepository`
 - `SandboxService`, `PoolService`, `ServiceExposeService`
 - `WebhookDispatcher` / `WebhookService`
@@ -97,32 +97,33 @@ projects the internal model into the API shape.
 
 #### `SandboxService`
 
-Owns the sandbox lifecycle on top of the `Sandbox` CRD:
+Owns the sandbox lifecycle on top of `SandboxClaim`:
 
-- compile a template plus request overrides into a `Sandbox` spec
-- create/read/list/update/delete `Sandbox` resources
-- map `status.phase` to `SandboxStatus`
+- compile a template into a `SandboxTemplate` (pod template + PVC template)
+- create/read/list/update/delete `SandboxClaim` resources
+- map claim/sandbox status to `SandboxStatus`
 - wait for Pod readiness on synchronous create/resume paths
-- suspend/resume, lock/unlock and TTL updates via `spec`
+- suspend/resume, lock/unlock and TTL updates
+- pause sandboxes whose TTL expired (`suspend_expired`, called by the API sweeper)
 - dispatch sandbox lifecycle webhooks
 - expose live status counts for the metrics endpoint
 
-It never creates Pods or PVCs. Those are the controller's responsibility.
+It never creates Pods or PVCs. The agent-sandbox controller creates the PVC
+from `volumeClaimTemplates` and injects it into the Pod.
 
 #### `PoolService`
 
 Warm-pool CRUD and claim on top of `SandboxService`:
 
-- pool definitions are `SandboxPool` custom resources
-- `create_pool` compiles the template into `spec.sandboxTemplate` once; the
-  pool controller clones it per sandbox
-- reconcile is the controller's job: it maintains `targetReady`,
-  `maxCreating`, pool states and status counts
-- allocation claims an `available` Sandbox with a JSON Patch that tests
-  `metadata.resourceVersion`; a lost race tries the next candidate
-- the claim also clears the pool ownerReference and writes the TTL
-- a missed claim creates directly and asks the controller to replenish via a
-  pool annotation
+- pool definitions are `SandboxWarmPool` custom resources, annotated with the
+  original `min_ready` / `max_creating`
+- `create_pool` ensures the `SandboxTemplate` exists, then creates or updates
+  the warm pool with `replicas = target_ready`
+- warm-pool supply and status counts are maintained by the upstream controller
+- allocation always creates a `SandboxClaim`; the claim controller adopts a
+  warm sandbox when one is ready, otherwise it cold-starts from the template
+- an implicit zero-replica warm pool is created for templates without a pool so
+  every claim has a `warmPoolRef`; it is hidden from the pool API
 - release deletes the CR; the controller observes the delete and replenishes
 
 #### `ServiceExposeService`
@@ -167,18 +168,18 @@ Adapts the REST services to the E2B wire format:
 
 #### `SandboxCRDGateway`
 
-- create/get/list/patch/delete `litterbox.io/v1alpha1 Sandbox` objects
+- create/get/list/patch/delete `agents.x-k8s.io/v1beta1 Sandbox` and
+  `extensions.agents.x-k8s.io/v1beta1` objects
 - merge-patch metadata, spec and status
-- JSON Patch support for the optimistic `resourceVersion` claim
-- wait for a target `status.phase` during control-plane operations
+- JSON Patch support for callers that need an optimistic `resourceVersion` test
 
 #### `SandboxPoolRepository`
 
-- creates/reads/patches/deletes `SandboxPool` custom resources
-- stores `targetReady`, `maxCreating`, `minReady` and the compiled
-  `sandboxTemplate`
-- reads controller-written `status` counts
-- writes a reconcile-request annotation after a pool miss
+- creates/reads/patches/deletes `SandboxWarmPool` custom resources
+- stores `targetReady` in `spec.replicas` and `minReady` / `maxCreating` in
+  annotations
+- reads controller-written `status` counts and counts allocated claims
+- hides implicit zero-replica pools from the pool API
 
 #### ConfigMap Repositories
 
@@ -190,9 +191,11 @@ Templates and webhooks are JSON documents stored in labeled ConfigMaps.
 
 - `Template` -> ConfigMap `template-<id>`
 - `Webhook` -> ConfigMap `webhook-<id>`
-- `Sandbox` -> CRD `sandboxes.litterbox.io`
-- `SandboxPool` -> CRD `sandboxpools.litterbox.io`
-- workspace -> PVC `workspace-<sandbox-id>`, owned by the Sandbox
+- `Template` -> `SandboxTemplate` (`extensions.agents.x-k8s.io`)
+- `Sandbox` -> `SandboxClaim`; the claim name is the public sandbox id
+- pool -> `SandboxWarmPool`
+- workspace -> PVC `workspace-<sandbox-name>`, created from the template's
+  `volumeClaimTemplates` and owned by the Sandbox
 - exposes -> Service/Ingress labeled with the sandbox id
 
 ### Redis
@@ -215,8 +218,8 @@ POST /api/v1/templates
 POST /api/v1/sandboxes (or POST /e2b/sandboxes)
   -> PoolService.allocate_sandbox
   -> SandboxService.create_sandbox
-  -> SandboxCRDGateway.create
-  -> sandbox-controller reconciles PVC + Pod
+  -> SandboxCRDGateway.create claim
+  -> agent-sandbox controller creates PVC + Pod
   -> SandboxService waits for Pod ready (direct create)
   -> API returns SandboxResponse
 ```
@@ -229,36 +232,26 @@ The controller does not read template ConfigMaps.
 
 ```text
 create pool
-  -> PoolService compiles template -> SandboxPool.spec.sandboxTemplate
-  -> pool-controller creates pool-state=creating Sandbox CRs
-  -> sandbox-controller creates Pods
-  -> pool-controller marks Running sandboxes available
+  -> PoolService ensures SandboxTemplate exists
+  -> create/update SandboxWarmPool with replicas = target_ready
+  -> agent-sandbox controller creates warm Sandboxes (and their PVCs)
 
 allocate
-  -> PoolService sees an enabled pool
-  -> list pool-state=available CRs
-  -> JSON Patch test metadata.resourceVersion
-  -> set pool-state=allocated, user metadata, TTL anchor
-  -> clear ownerReferences (allocated sandboxes survive pool deletion)
-  -> on 409 try the next available sandbox
-  -> pool-controller observes the update and replenishes
-
-pool miss
-  -> create a direct Sandbox
-  -> patch SandboxPool annotation to request reconcile
+  -> create SandboxClaim with warmPoolRef
+  -> claim controller adopts a ready warm sandbox or cold-starts one
+  -> claim becomes the public sandbox id; TTL is written to annotations
 ```
 
 ### Suspend, Resume, TTL
 
-- suspend patches `spec.state: Paused`; the controller deletes the Pod and
-  keeps the PVC
-- resume patches `spec.state: Running` and resets `spec.ttlAnchor`; the
-  controller recreates the Pod
-- `update_ttl` patches `spec.ttlSeconds` and `spec.ttlAnchor`
-- `renew_ttl` moves only the expiry by shifting the anchor, preserving the
-  configured TTL
-- the controller computes `expiresAt = ttlAnchor + ttlSeconds`, requeues at
-  that instant, and pauses the sandbox with `status.pausedReason=TTLExpired`
+- suspend patches `Sandbox.spec.operatingMode: Suspended`; the controller
+  deletes the Pod and keeps the PVC
+- resume patches `operatingMode: Running` and resets the TTL anchor; the
+  controller recreates the Pod on the same PVC
+- `update_ttl` / `renew_ttl` update the claim's `litterbox.io/ttl-seconds` and
+  `litterbox.io/ttl-anchor` annotations
+- the API sweeper computes `expiresAt = ttlAnchor + ttlSeconds`; when it passes
+  it suspends the sandbox and records `litterbox.io/ttl-suspended-at`
 - lock/unlock uses the `litterbox.io/resume-locked` annotation and blocks
   resume in the API
 
@@ -293,21 +286,18 @@ computed from `SandboxService.status_counts()`.
 
 ## Testing
 
-- `tests/test_sandbox_crd_backend.py`: CR spec compilation, CRD patches,
-  status mapping, suspend/resume, lock/unlock, TTL and status counts
-- `tests/test_pool_crd_backend.py`: SandboxPool compilation, optimistic claim,
-  pool repository and allocation fallback
+- `tests/test_agent_sandbox_adapter.py`: pod template, volume claim template,
+  claim/TTL mapping and warm-pool repository
 - `tests/test_kubernetes_gateway.py`: Pod lookup and readiness helpers
 - `tests/test_e2b_control_plane.py`: E2B response mapping
 - `tests/test_envd_proxy.py`, `tests/test_e2b_envd_host_routing.py`: proxy and host routing
 - `tests/test_config_validation.py`: configuration validators
 - `tests/test_webhooks_logging.py`, `tests/test_api_bearer_auth.py`: transport behavior
 - `tests/integration/`: FastAPI + Celery + a real Kubernetes cluster with the
-  controller installed
+  agent-sandbox controllers installed
 
-`controller/internal/controller/pod_test.go` covers Pod/PVC construction and
-status computation. `controller/e2e/e2b_crd_e2e.py` drives the official E2B SDK
-against a deployed controller.
+`tests/test_agent_sandbox_adapter.py` covers the pod template, claim and pool
+mapping. End-to-end E2B checks run against the deployed agent-sandbox backend.
 
 ## File Map
 
@@ -330,8 +320,8 @@ src/orchestrator/
     metrics.py            create metrics
   infra/
     kubernetes.py         core Kubernetes gateway
-    sandbox_crd.py        dynamic client for Sandbox CRs
-    sandbox_pool_crd.py   SandboxPool repository
+    sandbox_crd.py        dynamic client for agent-sandbox CRs
+    sandbox_pool_crd.py   SandboxWarmPool repository
     repositories.py       ConfigMap repositories (templates, webhooks)
   domain/
     models.py             REST and internal models

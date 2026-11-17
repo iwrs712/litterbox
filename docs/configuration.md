@@ -40,9 +40,9 @@ ORCHESTRATOR_ROLE=worker   # Celery webhook worker
 | 角色 | 进程 | 说明 |
 |---|---|---|
 | `api` | `uvicorn` | REST API、E2B 控制面和 envd 代理，需要 K8s 访问权限；Webhook/池功能需要 Redis |
-| `worker` | `celery` | 消费 `webhook_delivery` 队列；预热池由 `sandbox-controller` 维护 |
+| `worker` | `celery` | 消费 `webhook_delivery` 队列；预热池由上游 agent-sandbox 控制器维护 |
 
-> **注意**：沙箱 TTL 和预热池补水都由 `sandbox-controller` 处理。
+> **注意**：TTL 到期由 `api` 进程内的扫描任务暂停沙箱（保留 PVC）；预热池补水由上游 agent-sandbox 控制器处理。
 
 ---
 
@@ -130,11 +130,12 @@ max_sandboxes = 1000
 base_domain   = "example.com"
 ```
 
-> 沙箱生命周期由 `Sandbox`/`SandboxPool` CRD 和 `sandbox-controller` 管理。集群中需要安装
-> `controller/config/crd.yaml`、`controller/config/sandboxpool-crd.yaml`、
-> `controller/config/rbac.yaml` 和 `controller/config/controller.yaml`，并确保
-> orchestrator 的 ServiceAccount 有 `sandboxes.litterbox.io` 和
-> `sandboxpools.litterbox.io` 的读写权限。TTL 和池补水都由控制器在 reconcile 中处理。
+> 沙箱生命周期由上游 [agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox)
+> 的 `Sandbox`、`SandboxClaim`、`SandboxTemplate` 和 `SandboxWarmPool` 管理。
+> 安装方式见 [agent-sandbox backend](../orchestrator/deploy/AGENT_SANDBOX.md)；
+> orchestrator 的 ServiceAccount 需要对
+> `agents.x-k8s.io` 与 `extensions.agents.x-k8s.io` 的读写权限（RBAC 清单已包含）。
+> TTL 到期由 orchestrator 扫描并暂停沙箱（保留 PVC），池补水由上游控制器完成。
 
 ---
 
@@ -243,11 +244,12 @@ envd_version = "0.1.0"
 
 ## [ttl]
 
-TTL 默认值配置。TTL 的到期判断和暂停由 `sandbox-controller` 完成。
+TTL 默认值配置。TTL 到期判断由 `api` 进程内的扫描任务完成：到期后暂停沙箱，删除 Pod，保留 PVC。
 
 | Key | 类型 | 默认值 | 说明 |
 |---|---|---|---|
 | `default_ttl_seconds` | integer | `1800` | 模板和池未指定 TTL 时的默认存活时间（30 分钟） |
+| `worker_poll_interval_seconds` | float | `2.0` | TTL 扫描间隔（秒） |
 
 **环境变量：**
 

@@ -54,14 +54,11 @@ uv run celery -A orchestrator.celery_app:celery_app worker \
   -n worker@%h
 ```
 
-**Sandbox controller** (Go, required for every sandbox and pool):
-```bash
-cd ../controller
-go run ./cmd/controller --leader-elect=false --kubeconfig ~/.kube/config
-```
-In a cluster, apply `controller/config/crd.yaml`,
-`controller/config/sandboxpool-crd.yaml`, `controller/config/rbac.yaml` and
-`controller/config/controller.yaml` instead.
+**Sandbox backend**: the upstream agent-sandbox controller and extensions run
+inside the cluster. Install them with the release manifest and apply
+`orchestrator/deploy/agent-sandbox-rbac.yaml`; see
+[agent-sandbox backend](../orchestrator/deploy/AGENT_SANDBOX.md). The orchestrator
+does not need a Go controller running locally.
 
 > **Tip:** Use [tmux](https://github.com/tmux/tmux/wiki) or [overmind](https://github.com/DarthSim/overmind) to manage multiple terminals conveniently.
 
@@ -93,7 +90,7 @@ orchestrator/src/orchestrator/
 ├── infra/
 │   ├── kubernetes.py      # KubernetesGateway — Pods, Services, Ingresses, ConfigMaps
 │   ├── sandbox_crd.py     # Dynamic client for Sandbox custom resources
-│   ├── sandbox_pool_crd.py# SandboxPool repository
+│   ├── sandbox_pool_crd.py# SandboxWarmPool repository
 │   └── repositories.py    # ConfigMap-backed repos (TemplateRepo, WebhookRepo)
 ├── routes/                # HTTP transports
 │   ├── templates.py

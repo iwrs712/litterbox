@@ -7,7 +7,7 @@
 Kubernetes-native. REST API and an E2B-compatible control plane. VM-level isolation with Kata Containers.
 <br>
 
-[简体中文](README.zh.md) · [API Reference](docs/api-reference.md) · [E2B Guide](orchestrator/docs/API.md) · [Configuration](docs/configuration.md) · [Sandbox Controller](controller/README.md)
+[简体中文](README.zh.md) · [API Reference](docs/api-reference.md) · [E2B Guide](orchestrator/docs/API.md) · [Configuration](docs/configuration.md)
 
 </div>
 
@@ -66,7 +66,7 @@ flowchart LR
         Proxy["envd proxy"]
     end
 
-    Controller["sandbox-controller\nSandbox + SandboxPool"]
+    Controller["agent-sandbox\nTemplate · WarmPool · Claim"]
     Redis[("Redis\nCelery · webhooks")]
 
     subgraph Cluster["Kubernetes"]
@@ -80,7 +80,7 @@ flowchart LR
     Sdk --> E2B
     Sdk -->|"envd"| Proxy
     Dashboard -->|"envd"| Proxy
-    Rest -->|"Sandbox + SandboxPool CRs"| Controller
+    Rest -->|"SandboxTemplate / WarmPool / Claim"| Controller
     Controller -->|"Pod + PVC"| Sandbox
     E2B --> Rest
     Orchestrator <--> Redis
@@ -90,7 +90,7 @@ flowchart LR
 ```
 
 - **Control plane.** `/api/v1` manages templates, pools, webhooks, exposes and sandbox lifecycle. `/e2b` adapts the same services to the E2B SDK. Template, pool and webhook metadata live in ConfigMaps.
-- **Sandbox lifecycle.** The API writes `Sandbox` and `SandboxPool` custom resources; the controller owns Pods and PVCs, publishes `status.phase`, handles TTL expiry, repairs deleted Pods, and maintains warm-pool supply. REST and E2B clients never talk to Kubernetes workloads directly. Warm-pool claims use a `resourceVersion` JSON Patch instead of a global lock.
+- **Sandbox lifecycle.** The API writes `SandboxTemplate`, `SandboxWarmPool` and `SandboxClaim` custom resources to the upstream [agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox) controllers; those controllers own Pods, PVCs and warm-pool supply. The orchestrator pauses expired sandboxes (Pod deleted, PVC kept) and resumes them on the same PVC. REST and E2B clients never talk to Kubernetes workloads directly.
 - **Data plane.** When enabled, each sandbox runs an envd process on port `49983`. The orchestrator proxies authenticated traffic to the Pod, either at `/api/v1/sandboxes/{id}/envd/*` or through E2B host routing.
 - **Isolation.** Sandboxes use a Kata RuntimeClass, a per-sandbox `/workspace` PVC, and optionally a NetworkPolicy allowlist for ingress and egress.
 
@@ -104,9 +104,9 @@ flowchart LR
 | Python | 3.12+ |
 | Node.js | 18+ |
 
-### 1. Install the controller
+### 1. Install the sandbox backend
 
-Install the `Sandbox` / `SandboxPool` CRDs and the controller in your cluster. See [Sandbox Controller](controller/README.md).
+Install [agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox) core plus extensions, then apply the orchestrator RBAC. See [agent-sandbox backend](orchestrator/deploy/AGENT_SANDBOX.md).
 
 ### 2. Start the backend
 

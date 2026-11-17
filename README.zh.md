@@ -7,7 +7,7 @@
 基于 Kubernetes 的 REST API 与 E2B 兼容控制面，通过 Kata Containers 实现虚拟机级别的隔离。
 <br>
 
-[English](README.md) · [API 文档](docs/api-reference.md) · [E2B 指南](orchestrator/docs/API.md) · [配置说明](docs/configuration.md) · [沙箱控制器](controller/README.md)
+[English](README.md) · [API 文档](docs/api-reference.md) · [E2B 指南](orchestrator/docs/API.md) · [配置说明](docs/configuration.md)
 
 </div>
 
@@ -68,7 +68,7 @@ flowchart LR
 
     Redis[("Redis\nCelery · Webhook")]
 
-    Controller["sandbox-controller\nSandbox + SandboxPool"]
+    Controller["agent-sandbox\nTemplate · WarmPool · Claim"]
 
     subgraph Cluster["Kubernetes"]
         Sandbox["沙箱 Pod\nmain + envd + /workspace PVC"]
@@ -81,7 +81,7 @@ flowchart LR
     Sdk --> E2B
     Sdk -->|"envd"| Proxy
     Dashboard -->|"envd"| Proxy
-    Rest -->|"Sandbox + SandboxPool CR"| Controller
+    Rest -->|"SandboxTemplate / WarmPool / Claim"| Controller
     Controller -->|"Pod + PVC"| Sandbox
     E2B --> Rest
     Orchestrator <--> Redis
@@ -91,7 +91,7 @@ flowchart LR
 ```
 
 - **控制面。** `/api/v1` 管理模板、池、Webhook、端口暴露和沙箱生命周期；`/e2b` 把同一套服务适配给 E2B SDK。模板、池和 Webhook 的元数据存在 ConfigMap 中。
-- **沙箱生命周期。** API 只写入 `Sandbox` 和 `SandboxPool` 自定义资源；控制器负责创建和回收 Pod/PVC、维护 `status.phase`、处理 TTL 到期、自动修复被删除的 Pod，并维护预热池供给。REST 和 E2B 客户端不直接操作 Kubernetes 工作负载。预热池分配使用基于 `resourceVersion` 的 JSON Patch，不使用全局锁。
+- **沙箱生命周期。** API 写入 `SandboxTemplate`、`SandboxWarmPool` 和 `SandboxClaim`，由上游 [agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox) 控制器负责 Pod、PVC 和预热池供给。orchestrator 在 TTL 到期时暂停沙箱（删除 Pod、保留 PVC），恢复时在同一 PVC 上重建 Pod。REST 和 E2B 客户端不直接操作 Kubernetes 工作负载。
 - **数据面。** 启用 envd 后，每个沙箱在 `49983` 端口运行 envd 进程。orchestrator 负责鉴权并将流量代理到 Pod，路径为 `/api/v1/sandboxes/{id}/envd/*`，或通过 E2B 的域名路由。
 - **隔离。** 沙箱使用 Kata RuntimeClass、独立的 `/workspace` PVC，并可选配 NetworkPolicy 入向/出向白名单。
 
@@ -105,9 +105,9 @@ flowchart LR
 | Python | 3.12+ |
 | Node.js | 18+ |
 
-### 1. 安装控制器
+### 1. 安装沙箱后端
 
-在集群中安装 `Sandbox` / `SandboxPool` CRD 和控制器，见 [沙箱控制器](controller/README.md)。
+在集群中安装 [agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox) 的 core 与 extensions，并应用 orchestrator 的 RBAC，见 [agent-sandbox 后端](orchestrator/deploy/AGENT_SANDBOX.md)。
 
 ### 2. 启动后端
 
