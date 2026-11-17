@@ -404,7 +404,7 @@
         <div class="node-group" id="services-group">
           <div class="group-title">Orchestrator Services</div>
           <div class="node control service-card" id="svc-template"><strong>Template</strong><small>模板定义</small></div>
-          <div class="node control service-card" id="svc-sandbox"><strong>Sandbox</strong><small>CR 生命周期 · TTL</small></div>
+          <div class="node control service-card" id="svc-sandbox"><strong>Sandbox</strong><small>Claim 生命周期 · TTL 扫描</small></div>
           <div class="node control service-card" id="svc-pool"><strong>Pool</strong><small>声明与领取</small></div>
           <div class="node control service-card" id="svc-e2b"><strong>E2B Service</strong><small>控制面适配</small></div>
           <div class="node control service-card" id="svc-expose"><strong>Expose</strong><small>Service · Ingress</small></div>
@@ -421,7 +421,7 @@
         </div>
         <div class="node k8s" id="controllers">
           <strong>Sandbox Controller</strong>
-          <small>Sandbox + SandboxPool<br>reconcile · leader election</small>
+          <small>SandboxClaim · SandboxTemplate · WarmPool<br>upstream agent-sandbox controllers</small>
         </div>
         <div class="node control" id="workers">
           <strong>Webhook Worker</strong>
@@ -433,7 +433,7 @@
         </div>
         <div class="node-group" id="resources-group">
           <div class="group-title">Sandbox Resources</div>
-          <div class="node k8s resource-card" id="res-deploy"><strong>Sandbox CR</strong><small>SandboxPool · warm supply</small></div>
+          <div class="node k8s resource-card" id="res-deploy"><strong>SandboxClaim / Sandbox</strong><small>Template · WarmPool · warm supply</small></div>
           <div class="node k8s resource-card" id="res-service"><strong>Service</strong><small>runtime routing</small></div>
           <div class="node k8s resource-card" id="res-pvc"><strong>Workspace PVC</strong><small>persistent data</small></div>
           <div class="node k8s resource-card" id="res-pod"><strong>Kata Pod / VM</strong><small>isolated workload</small></div>

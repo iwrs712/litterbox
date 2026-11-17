@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Litterbox 架构全景</title>
+<style>
+  :root {
+    --bg: #f4f6fb; --ink: #172033; --muted: #667085; --line: #d9dfeb;
+    --control: #7c3aed; --data: #0f9f7a; --async: #d97706; --infra: #64748b; --k8s: #2563eb;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; color: var(--ink); background: var(--bg);
+    font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif; }
+  .page { width: 1840px; margin: 24px auto 40px; padding: 0 16px; }
+  header { display: flex; justify-content: space-between; align-items: flex-end; gap: 24px; margin-bottom: 16px; }
+  .eyebrow { margin: 0 0 6px; color: var(--control); font-size: 12px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
+  h1 { margin: 0; font-size: 30px; }
+  .sub { margin: 6px 0 0; color: var(--muted); font-size: 14px; }
+  .legend { display: flex; gap: 8px; }
+  .legend button { display: inline-flex; align-items: center; gap: 8px; padding: 7px 12px; border: 1px solid var(--line);
+    border-radius: 999px; background: #fff; color: var(--ink); font: inherit; font-size: 13px; cursor: pointer; opacity: .45; }
+  .legend button.on { opacity: 1; border-color: #98a2b3; }
+  .swatch { width: 22px; height: 0; border-top: 2px solid; }
+  .swatch.control { border-color: var(--control); }
+  .swatch.data { border-color: var(--data); }
+  .swatch.async { border-color: var(--async); border-top-style: dashed; }
+  .swatch.infra { border-color: var(--infra); border-top-style: dotted; }
+
+  .canvas { position: relative; width: 1808px; height: 880px; }
+  .zone { position: absolute; border: 1px solid var(--line); border-radius: 16px; background: rgba(255,255,255,.55); }
+  .zone.ns { border-color: #bfd3fb; background: rgba(237,244,255,.55); }
+  .zone.host { border-style: dashed; background: rgba(241,245,249,.8); }
+  .zone.group { border: 1px dashed #c4b5fd; background: rgba(243,232,255,.5); border-radius: 12px; }
+  .zone.pod { border: 1.5px dashed #6fcfb1; background: rgba(231,251,244,.75); border-radius: 12px; }
+  .zone > span { position: absolute; top: 7px; left: 12px; font-size: 11px; font-weight: 800; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--muted); white-space: nowrap; }
+  .zone.ns > span { color: var(--k8s); }
+  .zone.group > span { color: var(--control); letter-spacing: .02em; text-transform: none; font-size: 12px; }
+  .zone.pod > span { color: var(--data); letter-spacing: .02em; text-transform: none; font-size: 12px; }
+
+  .node { position: absolute; z-index: 3; padding: 9px 11px; border: 1px solid var(--line); border-left: 4px solid var(--infra);
+    border-radius: 10px; background: #fff; transition: box-shadow .15s, opacity .15s; }
+  .node h4 { margin: 0; font-size: 14px; white-space: nowrap; }
+  .node p { margin: 3px 0 0; font-size: 12px; line-height: 1.45; color: var(--muted); }
+  .node code { font-size: 11.5px; color: var(--ink); }
+  .node.control { border-left-color: var(--control); }
+  .node.data { border-left-color: var(--data); }
+  .node.async { border-left-color: var(--async); }
+  .node.k8s { border-left-color: var(--k8s); }
+  .node.store { border-radius: 10px 10px 18px 18px; }
+  .canvas.focus .node { opacity: .3; }
+  .canvas.focus .node.hot { opacity: 1; box-shadow: 0 6px 18px rgba(23,32,51,.16); }
+
+  svg.edges { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 2; pointer-events: none; overflow: visible; }
+  .edge path { fill: none; stroke-width: 1.8; stroke-linejoin: round; }
+  .edge.control path { stroke: var(--control); }
+  .edge.data path { stroke: var(--data); }
+  .edge.async path { stroke: var(--async); stroke-dasharray: 6 4; }
+  .edge.infra path { stroke: var(--infra); stroke-dasharray: 2 4; }
+  .edge text { font-size: 11px; fill: var(--ink); paint-order: stroke; stroke: var(--bg); stroke-width: 5px; stroke-linejoin: round; }
+  .canvas.focus .edge { opacity: .1; }
+  .canvas.focus .edge.hot { opacity: 1; }
+  .canvas.focus .edge.hot path { stroke-width: 2.6; }
+  .edge.off { display: none; }
+
+  .notes { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-top: 20px; }
+  .card { padding: 16px 18px; border: 1px solid var(--line); border-radius: 14px; background: #fff; }
+  .card h3 { margin: 0 0 10px; font-size: 15px; }
+  .card ol, .card ul { margin: 0; padding-left: 18px; font-size: 13px; line-height: 1.65; color: #344054; }
+  .card code { font-size: 12px; }
+  footer { margin-top: 16px; font-size: 12px; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="page">
+  <header>
+    <div>
+      <p class="eyebrow">Litterbox · System Overview</p>
+      <h1>架构全景</h1>
+      <p class="sub">agent-sandbox core + extensions · FastAPI 控制面 · envd 数据面 · Kata 隔离 · workspace PVC</p>
+    </div>
+    <div class="legend" id="legend">
+      <button data-kind="control"><span class="swatch control"></span>控制面</button>
+      <button data-kind="data"><span class="swatch data"></span>数据面</button>
+      <button data-kind="async"><span class="swatch async"></span>watch / 异步</button>
+      <button data-kind="infra"><span class="swatch infra"></span>基础设施</button>
+    </div>
+  </header>
+
+  <div class="canvas" id="canvas" style="height:1040px">
+    <svg class="edges" id="edges"></svg>
+
+    <div class="zone" style="left:16px;top:20px;width:820px;height:100px"><span>客户端</span></div>
+    <div class="node control" id="dash" style="left:32px;top:48px;width:250px;height:60px"><h4>Dashboard</h4><p>模板 · 池 · 沙箱 · 终端</p></div>
+    <div class="node control" id="rest" style="left:298px;top:48px;width:230px;height:60px"><h4>REST 客户端</h4><p>Bearer Token</p></div>
+    <div class="node control" id="sdk" style="left:544px;top:48px;width:276px;height:60px"><h4>E2B SDK</h4><p>X-API-Key · envd access token</p></div>
+
+    <div class="zone" style="left:846px;top:20px;width:260px;height:100px"><span>外部</span></div>
+    <div class="node async" id="hook" style="left:856px;top:48px;width:240px;height:60px"><h4>Webhook 端点</h4><p>sandbox_started · ready · deleted</p></div>
+
+    <div class="zone" style="left:16px;top:150px;width:1776px;height:90px"><span>Traefik Ingress</span></div>
+    <div class="node control" id="ingApi" style="left:32px;top:176px;width:496px;height:52px"><h4>orchestrator.runlet.cn</h4><p>控制面 API · Dashboard 的 envd 路径路由</p></div>
+    <div class="node data" id="ingEnvd" style="left:544px;top:176px;width:276px;height:52px"><h4>*.sandbox.runlet.cn</h4><p><code>49983-{id}</code> E2B envd 数据面</p></div>
+    <div class="node data" id="ingExpose" style="left:1500px;top:176px;width:276px;height:52px"><h4>{port}-{id}.runlet.cn</h4><p>用户端口暴露</p></div>
+
+    <div class="zone ns" style="left:16px;top:272px;width:1776px;height:198px"><span>namespace · litterbox</span></div>
+    <div class="zone group" style="left:24px;top:300px;width:804px;height:154px"><span>orchestrator-service · FastAPI · 无状态</span></div>
+    <div class="node control" id="apiRest" style="left:32px;top:330px;width:250px;height:108px"><h4>/api/v1</h4><p>sandboxes · templates · pools · exposes<br>TTL 扫描：到期暂停并保留 PVC<br>workspace：全局 → 模板 → 请求</p></div>
+    <div class="node control" id="apiE2b" style="left:298px;top:330px;width:230px;height:108px"><h4>/e2b</h4><p>E2B 控制面兼容层<br>create · connect<br>pause · timeout · kill</p></div>
+    <div class="node data" id="proxy" style="left:544px;top:330px;width:276px;height:108px"><h4>envd proxy</h4><p>解析 ready Pod IP<br>缓存 5s · 失败重试<br>流式转发 Connect RPC</p></div>
+    <div class="node async" id="worker" style="left:856px;top:300px;width:240px;height:64px"><h4>orchestrator-worker</h4><p>Celery · 只消费 <code>webhook_delivery</code></p></div>
+    <div class="node async store" id="redis" style="left:856px;top:384px;width:240px;height:56px"><h4>Redis</h4><p>仅作 Celery broker</p></div>
+    <div class="zone group" style="left:1120px;top:300px;width:664px;height:154px"><span>agent-sandbox controllers · upstream · core + extensions</span></div>
+    <div class="node k8s" id="poolRec" style="left:1132px;top:330px;width:288px;height:108px"><h4>SandboxWarmPool reconciler</h4><p>replicas 不足时补预热沙箱<br>每个预热沙箱创建自己的 PVC</p></div>
+    <div class="node k8s" id="sbxRec" style="left:1448px;top:330px;width:328px;height:108px"><h4>Sandbox / Claim reconciler</h4><p>收敛 Pod / PVC · 回写 status<br>暂停只删 Pod、保留 PVC<br>Claim 领取预热或冷启动</p></div>
+    <div class="zone ns" style="left:16px;top:524px;width:1776px;height:300px"><span>namespace · default</span></div>
+    <div class="node store" id="cm" style="left:32px;top:554px;width:250px;height:56px"><h4>ConfigMap</h4><p>templates · webhooks</p></div>
+    <div class="node" id="netpol" style="left:32px;top:634px;width:250px;height:56px"><h4>NetworkPolicy</h4><p>模板级 · 当前 Unmanaged</p></div>
+
+    <div class="zone pod" id="pod" style="left:298px;top:552px;width:522px;height:160px"><span>Sandbox Pod · kata-clh</span></div>
+    <div class="node data" id="main" style="left:310px;top:590px;width:240px;height:84px"><h4>main 容器</h4><p>模板镜像 · 用户进程<br>挂载 <code>/workspace</code></p></div>
+    <div class="node data" id="envd" style="left:566px;top:590px;width:242px;height:84px"><h4>envd :49983</h4><p>exec · files · PTY<br>postStart 从 hostPath 启动</p></div>
+
+    <div class="node data" id="expose" style="left:856px;top:554px;width:240px;height:56px"><h4>Service + Ingress</h4><p>端口暴露 <code>ing-expose-*</code></p></div>
+    <div class="node data store" id="pvc" style="left:856px;top:630px;width:240px;height:70px"><h4>PVC workspace-{id}</h4><p>暂停保留 · 删除时级联回收</p></div>
+
+    <div class="node k8s store" id="poolCR" style="left:1132px;top:554px;width:260px;height:70px"><h4>SandboxWarmPool CR</h4><p><code>sandbox-agent</code> · replicas 1<br>min / max 写在注解</p></div>
+    <div class="node k8s store" id="sbxCR" style="left:1460px;top:554px;width:316px;height:110px"><h4>SandboxClaim / Sandbox</h4><p><code>agents.x-k8s.io/v1beta1</code><br>claim: pool · env · lifecycle<br>sandbox: podTemplate · VCT<br>status: podIPs · conditions</p></div>
+    <div class="node" id="live" style="left:1460px;top:714px;width:316px;height:86px"><h4>线上状态 · 2026-11-17</h4><p>1 个业务沙箱运行<br>池 ready 1 / target 1<br>workspace PVC 持久化</p></div>
+
+    <div class="zone host" style="left:16px;top:864px;width:1776px;height:160px"><span>节点 iwrs-wujie14xa · 单节点 k3s · DaemonSet / 系统组件</span></div>
+    <div class="node" id="kata" style="left:298px;top:904px;width:252px;height:64px"><h4>kata-deploy</h4><p>安装 Kata 运行时 · kata-clh</p></div>
+    <div class="node" id="envdInst" style="left:566px;top:904px;width:254px;height:64px"><h4>envd-node-installer</h4><p>写入 <code>/opt/litterbox/bin/envd</code></p></div>
+    <div class="node store" id="lvm" style="left:856px;top:904px;width:330px;height:84px"><h4>OpenEBS LVM localpv</h4><p>StorageClass <code>litterbox-workspace-lvm</code><br>动态供给 workspace PVC</p></div>
+  </div>
+  <div class="notes">
+    <div class="card">
+      <h3>创建沙箱（无预热池）</h3>
+      <ol>
+        <li>API 合并 workspace：全局配置 → 模板 → 请求</li>
+        <li>写 <code>SandboxClaim</code></li>
+        <li>agent-sandbox 创建 PVC 和 Pod，回写 <code>status</code></li>
+        <li>API 等 Pod ready 后返回</li>
+      </ol>
+    </div>
+    <div class="card">
+      <h3>从预热池分配</h3>
+      <ol>
+        <li>创建 <code>SandboxClaim</code>，领取预热或冷启动</li>
+        <li>领取后 claim 成为对外 sandbox id</li>
+        <li>立即返回已就绪沙箱</li>
+        <li>SandboxWarmPool reconciler 补回 replicas</li>
+      </ol>
+    </div>
+    <div class="card">
+      <h3>envd 数据面</h3>
+      <ol>
+        <li>E2B SDK 走 <code>49983-{id}.sandbox.runlet.cn</code></li>
+        <li>Dashboard 走 <code>/api/v1/sandboxes/{id}/envd</code></li>
+        <li>envd proxy 查 ready Pod IP（缓存 5s）</li>
+        <li>转发到 <code>PodIP:49983</code>，不经过控制器</li>
+      </ol>
+    </div>
+    <div class="card">
+      <h3>暂停 · TTL · 删除</h3>
+      <ul>
+        <li>暂停：<code>operatingMode=Suspended</code>，删 Pod 留 PVC</li>
+        <li>TTL：API 扫描到期后暂停，PVC 不动</li>
+        <li>恢复：<code>operatingMode=Running</code> 重建 Pod，PVC 数据保留</li>
+        <li>删除：删 Claim，级联回收 Sandbox、Pod 和 PVC</li>
+      </ul>
+    </div>
+  </div>
+  <footer>悬停任一组件高亮关联链路；点击图例按类型显示或隐藏。依据 main 分支代码与 2026-11-04 生产集群状态绘制。</footer>
+</div>
+<script>
+// [from, to, kind, label, label x/y, waypoints...]  坐标均为画布内绝对像素
+const EDGES = [
+  ['dash', 'ingApi', 'control', '', null, [157,108], [157,176]],
+  ['rest', 'ingApi', 'control', '', null, [413,108], [413,176]],
+  ['sdk', 'ingApi', 'control', '控制面', [552,136], [600,108], [600,140], [500,140], [500,176]],
+  ['sdk', 'ingEnvd', 'data', 'envd RPC', [720,140], [720,108], [720,176]],
+  ['ingApi', 'apiRest', 'control', '', null, [157,228], [157,330]],
+  ['ingApi', 'apiE2b', 'control', '', null, [413,228], [413,330]],
+  ['ingApi', 'proxy', 'data', 'Dashboard envd 路径', [552,256], [500,228], [500,260], [600,260], [600,330]],
+  ['ingEnvd', 'proxy', 'data', '', null, [720,228], [720,330]],
+  ['apiE2b', 'apiRest', 'control', '', null, [298,384], [282,384]],
+  ['apiRest', 'cm', 'control', '模板 / webhook', [70,500], [70,438], [70,554]],
+  ['apiRest', 'redis', 'async', '投递事件', [790,458], [100,438], [100,462], [840,462], [840,412], [856,412]],
+  ['apiRest', 'sbxCR', 'control', '创建 / patch / claim', [1340,476], [190,438], [190,480], [1520,480], [1520,554]],
+  ['apiRest', 'poolCR', 'control', '池配置', [860,492], [220,438], [220,496], [1262,496], [1262,554]],
+  ['apiRest', 'expose', 'control', '创建端口暴露', [600,508], [250,438], [250,512], [960,512], [960,554]],
+  ['redis', 'worker', 'async', '', null, [976,384], [976,364]],
+  ['worker', 'hook', 'async', 'HTTP + 重试', [976,136], [976,300], [976,108]],
+  ['poolCR', 'poolRec', 'async', 'watch', [1200,538], [1200,554], [1200,438]],
+  ['poolRec', 'sbxCR', 'control', '补充 / 清理', [1410,540], [1410,438], [1410,600], [1460,600]],
+  ['sbxCR', 'sbxRec', 'async', 'watch', [1708,510], [1708,554], [1708,438]],
+  ['sbxRec', 'sbxCR', 'control', '回写 status', [1620,510], [1620,438], [1620,554]],
+  ['sbxRec', 'main', 'control', '创建 / 删除 Pod', [1150,852], [1448,400], [1432,400], [1432,848], [340,848], [340,674]],
+  ['sbxRec', 'pvc', 'control', '创建 PVC', [1300,832], [1448,420], [1440,420], [1440,836], [1000,836], [1000,700]],
+  ['proxy', 'envd', 'data', 'PodIP:49983', [760,566], [720,438], [720,590]],
+  ['ingExpose', 'expose', 'data', '端口路由', [1300,252], [1638,228], [1638,256], [1110,256], [1110,582], [1096,582]],
+  ['expose', 'main', 'data', 'Service 选中 Pod', [650,544], [856,568], [840,568], [840,540], [470,540], [470,590]],
+  ['pvc', 'main', 'data', '挂载 /workspace', [680,704], [856,680], [840,680], [840,700], [520,700], [520,674]],
+  ['lvm', 'pvc', 'infra', '提供 LV', [1050,780], [1050,904], [1050,700]],
+  ['envdInst', 'envd', 'infra', 'hostPath', [693,790], [693,904], [693,674]],
+  ['kata', 'main', 'infra', 'Kata 运行时', [400,790], [400,904], [400,674]],
+  ['netpol', 'main', 'infra', '', null, [282,654], [310,654]],
+];
+
+const canvas = document.getElementById('canvas');
+const svg = document.getElementById('edges');
+const NS = 'http://www.w3.org/2000/svg';
+const hidden = new Set();
+
+function roundedPath(pts, r = 8) {
+  let d = `M${pts[0][0]},${pts[0][1]}`;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const [px, py] = pts[i - 1], [cx, cy] = pts[i], [nx, ny] = pts[i + 1];
+    const l1 = Math.hypot(cx - px, cy - py), l2 = Math.hypot(nx - cx, ny - cy);
+    const k = Math.min(r, l1 / 2, l2 / 2);
+    const ax = cx - (cx - px) / l1 * k, ay = cy - (cy - py) / l1 * k;
+    const bx = cx + (nx - cx) / l2 * k, by = cy + (ny - cy) / l2 * k;
+    d += ` L${ax},${ay} Q${cx},${cy} ${bx},${by}`;
+  }
+  const last = pts[pts.length - 1];
+  return d + ` L${last[0]},${last[1]}`;
+}
+
+function draw() {
+  svg.innerHTML = '';
+  const defs = document.createElementNS(NS, 'defs');
+  for (const k of ['control', 'data', 'async', 'infra']) {
+    const color = getComputedStyle(document.documentElement).getPropertyValue('--' + k).trim();
+    defs.innerHTML += `<marker id="arrow-${k}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="${color}"/></marker>`;
+  }
+  svg.appendChild(defs);
+  const labels = [];
+  for (const [from, to, kind, label, lp, ...pts] of EDGES) {
+    const g = document.createElementNS(NS, 'g');
+    g.setAttribute('class', `edge ${kind}${hidden.has(kind) ? ' off' : ''}`);
+    g.dataset.from = from;
+    g.dataset.to = to;
+    const path = document.createElementNS(NS, 'path');
+    path.setAttribute('d', roundedPath(pts));
+    path.setAttribute('marker-end', `url(#arrow-${kind})`);
+    g.appendChild(path);
+    svg.appendChild(g);
+    if (label) labels.push([g, label, lp]);
+  }
+  for (const [g, label, [x, y]] of labels) {
+    const t = document.createElementNS(NS, 'text');
+    t.setAttribute('x', x);
+    t.setAttribute('y', y + 4);
+    t.setAttribute('text-anchor', 'middle');
+    t.textContent = label;
+    g.appendChild(t);
+  }
+}
+
+function setFocus(id) {
+  canvas.classList.toggle('focus', !!id);
+  document.querySelectorAll('.hot').forEach(n => n.classList.remove('hot'));
+  if (!id) return;
+  document.getElementById(id).classList.add('hot');
+  svg.querySelectorAll('.edge:not(.off)').forEach(e => {
+    if (e.dataset.from !== id && e.dataset.to !== id) return;
+    e.classList.add('hot');
+    document.getElementById(e.dataset.from).classList.add('hot');
+    document.getElementById(e.dataset.to).classList.add('hot');
+  });
+}
+
+document.querySelectorAll('.node[id]').forEach(n => {
+  n.addEventListener('mouseenter', () => setFocus(n.id));
+  n.addEventListener('mouseleave', () => setFocus(null));
+});
+
+document.querySelectorAll('#legend button').forEach(btn => {
+  btn.classList.add('on');
+  btn.addEventListener('click', () => {
+    const k = btn.dataset.kind;
+    hidden.has(k) ? hidden.delete(k) : hidden.add(k);
+    btn.classList.toggle('on', !hidden.has(k));
+    draw();
+  });
+});
+
+draw();
+</script>
+</body>
+</html>
