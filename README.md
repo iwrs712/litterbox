@@ -53,12 +53,13 @@ Define a template, and Litterbox provisions an isolated sandbox on Kubernetes, m
 ## Architecture
 
 ```mermaid
-%%{init: {"flowchart": {"curve": "stepBefore", "nodeSpacing": 40, "rankSpacing": 60}}}%%
+%%{init: {"flowchart": {"curve": "stepBefore", "nodeSpacing": 40, "rankSpacing": 55}}}%%
 flowchart LR
     Client["Clients<br/>Dashboard · REST · E2B SDK"]
+    Ingress["Ingress<br/>control · envd · exposed ports"]
 
     subgraph Orchestrator["Orchestrator · FastAPI"]
-        API["Control API<br/>/api/v1 · /e2b<br/>TTL sweeper"]
+        API["Control API<br/>/api/v1 · /e2b<br/>TTL sweeper · ConfigMaps"]
         Proxy["envd proxy"]
     end
 
@@ -68,24 +69,27 @@ flowchart LR
     end
 
     subgraph Cluster["Kubernetes · agent-sandbox"]
-        CRs["SandboxTemplate<br/>SandboxWarmPool<br/>SandboxClaim"]
+        CRs["Sandbox<br/>Template · WarmPool · Claim"]
         Ctrl["agent-sandbox<br/>controllers"]
+        Svc["Service / Ingress<br/>exposed port"]
         Pod["Sandbox Pod · Kata VM<br/>main + envd :49983"]
         PVC[("workspace PVC")]
     end
 
     Hook["Webhook endpoints"]
 
+    Client --> Ingress -->|"control"| API
+    Ingress -->|"envd"| Proxy
     API --> Redis --> Worker --> Hook
-    Client -->|"control"| API
     API -->|"write CRs"| CRs --> Ctrl -->|"create"| Pod
-    Client -->|"data"| Proxy
+    API -->|"creates"| Svc --> Pod
     Proxy -->|"Pod IP"| Pod
     Pod --- PVC
 ```
 
 - **Control plane.** `/api/v1` manages templates, pools, exposes, webhooks and sandbox lifecycle; `/e2b` exposes the same services to E2B clients. Template and webhook metadata live in ConfigMaps, and a sweeper in the API pauses sandboxes whose TTL expired.
 - **Sandbox layer.** The API writes `SandboxTemplate`, `SandboxWarmPool` and `SandboxClaim` objects. Upstream [agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox) controllers create the Pod, the PVC and the warm pool. A claim adopts a warm sandbox when one is ready, otherwise it cold-starts one.
+- **Exposure.** Ingress routes control and envd traffic to the orchestrator, and each exposed port gets a per-sandbox Service/Ingress that targets the running Pod.
 - **Data plane.** Each sandbox runs envd on `49983`. The orchestrator authenticates and proxies terminal, file and process traffic to the Pod IP, either through `/api/v1/sandboxes/{id}/envd/*` or E2B host routing.
 - **Isolation.** Sandboxes run in a Kata VM. `/workspace` is a per-sandbox PVC that survives pause and TTL expiry; template-level NetworkPolicy can restrict ingress and egress.
 
