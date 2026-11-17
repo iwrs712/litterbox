@@ -53,46 +53,66 @@ Define a template, and Litterbox provisions an isolated sandbox on Kubernetes, m
 ## Architecture
 
 ```mermaid
-flowchart LR
+flowchart TB
     subgraph Clients["Clients"]
+        direction LR
         Dashboard["Dashboard"]
         RestClient["REST clients"]
         Sdk["E2B SDK"]
     end
 
-    subgraph Orchestrator["Orchestrator  (FastAPI + Celery)"]
-        Rest["REST API\n/api/v1"]
-        E2B["E2B API\n/e2b"]
+    subgraph Control["Orchestrator · FastAPI"]
+        direction LR
+        API["REST /api/v1 · E2B /e2b"]
         Proxy["envd proxy"]
     end
 
-    Controller["agent-sandbox\nTemplate · WarmPool · Claim"]
-    Redis[("Redis\nCelery · webhooks")]
-
-    subgraph Cluster["Kubernetes"]
-        Sandbox["Sandbox Pod\nmain + envd + /workspace PVC"]
-        Runtime["RuntimeClass"]
-        NetPol["NetworkPolicy"]
+    subgraph Async["Async"]
+        direction LR
+        Redis[("Redis")]
+        Worker["webhook worker"]
     end
 
-    Dashboard --> Rest
-    RestClient --> Rest
-    Sdk --> E2B
-    Sdk -->|"envd"| Proxy
-    Dashboard -->|"envd"| Proxy
-    Rest -->|"SandboxTemplate / WarmPool / Claim"| Controller
-    Controller -->|"Pod + PVC"| Sandbox
-    E2B --> Rest
-    Orchestrator <--> Redis
-    Proxy -->|"Pod IP :49983"| Sandbox
-    Runtime -.-> Sandbox
-    NetPol -.-> Sandbox
+    subgraph K8s["Kubernetes · agent-sandbox"]
+        direction TB
+        CR["SandboxTemplate · SandboxWarmPool\nSandboxClaim"]
+        AS["agent-sandbox controllers\ncore + extensions"]
+        Pod["Sandbox Pod · Kata VM\nmain + envd"]
+        PVC[("workspace PVC")]
+        Ingress["Service / Ingress"]
+    end
+
+    Hook["Webhook endpoints"]
+
+    Dashboard --> API
+    RestClient --> API
+    Sdk --> API
+    Sdk -.->|"envd"| Proxy
+    Dashboard -.->|"terminal"| Proxy
+
+    API -->|"writes CRs"| CR
+    CR -->|"reconciled by"| AS
+    AS -->|"creates"| Pod
+    Pod ---|"mounts"| PVC
+    API -->|"creates expose"| Ingress
+    Ingress --> Pod
+    Proxy -->|"Pod IP :49983"| Pod
+
+    API --> Redis
+    Redis --> Worker
+    Worker --> Hook
 ```
 
-- **Control plane.** `/api/v1` manages templates, pools, webhooks, exposes and sandbox lifecycle. `/e2b` adapts the same services to the E2B SDK. Template, pool and webhook metadata live in ConfigMaps.
-- **Sandbox lifecycle.** The API writes `SandboxTemplate`, `SandboxWarmPool` and `SandboxClaim` custom resources to the upstream [agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox) controllers; those controllers own Pods, PVCs and warm-pool supply. The orchestrator pauses expired sandboxes (Pod deleted, PVC kept) and resumes them on the same PVC. REST and E2B clients never talk to Kubernetes workloads directly.
-- **Data plane.** When enabled, each sandbox runs an envd process on port `49983`. The orchestrator proxies authenticated traffic to the Pod, either at `/api/v1/sandboxes/{id}/envd/*` or through E2B host routing.
-- **Isolation.** Sandboxes use a Kata RuntimeClass, a per-sandbox `/workspace` PVC, and optionally a NetworkPolicy allowlist for ingress and egress.
+- **Control plane.** `/api/v1` manages templates, pools, exposes, webhooks and sandbox lifecycle; `/e2b` exposes the same services to E2B clients. Template and webhook metadata live in ConfigMaps, and a sweeper in the API pauses sandboxes whose TTL expired.
+- **Sandbox layer.** The API writes `SandboxTemplate`, `SandboxWarmPool` and `SandboxClaim` objects. Upstream [agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox) controllers create the Pod, the PVC and the warm pool. A claim adopts a warm sandbox when one is ready, otherwise it cold-starts one.
+- **Data plane.** Each sandbox runs envd on `49983`. The orchestrator authenticates and proxies terminal, file and process traffic to the Pod IP, either through `/api/v1/sandboxes/{id}/envd/*` or E2B host routing.
+- **Isolation.** Sandboxes run in a Kata VM. `/workspace` is a per-sandbox PVC that survives pause and TTL expiry; template-level NetworkPolicy can restrict ingress and egress.
+
+| Path | What happens |
+|---|---|
+| Create | `SandboxClaim` → warm adoption or cold start → PVC + Pod ready |
+| Use | client → orchestrator proxy → `PodIP:49983` (envd) |
+| Pause / TTL | `operatingMode=Suspended` → Pod deleted, PVC kept; resume reattaches it |
 
 <br>
 

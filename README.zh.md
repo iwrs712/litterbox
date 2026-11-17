@@ -53,47 +53,66 @@
 ## 架构
 
 ```mermaid
-flowchart LR
+flowchart TB
     subgraph Clients["客户端"]
+        direction LR
         Dashboard["Dashboard"]
         RestClient["REST 调用方"]
         Sdk["E2B SDK"]
     end
 
-    subgraph Orchestrator["Orchestrator  (FastAPI + Celery)"]
-        Rest["REST API\n/api/v1"]
-        E2B["E2B API\n/e2b"]
+    subgraph Control["Orchestrator · FastAPI"]
+        direction LR
+        API["REST /api/v1 · E2B /e2b"]
         Proxy["envd 代理"]
     end
 
-    Redis[("Redis\nCelery · Webhook")]
-
-    Controller["agent-sandbox\nTemplate · WarmPool · Claim"]
-
-    subgraph Cluster["Kubernetes"]
-        Sandbox["沙箱 Pod\nmain + envd + /workspace PVC"]
-        Runtime["RuntimeClass"]
-        NetPol["NetworkPolicy"]
+    subgraph Async["异步"]
+        direction LR
+        Redis[("Redis")]
+        Worker["Webhook worker"]
     end
 
-    Dashboard --> Rest
-    RestClient --> Rest
-    Sdk --> E2B
-    Sdk -->|"envd"| Proxy
-    Dashboard -->|"envd"| Proxy
-    Rest -->|"SandboxTemplate / WarmPool / Claim"| Controller
-    Controller -->|"Pod + PVC"| Sandbox
-    E2B --> Rest
-    Orchestrator <--> Redis
-    Proxy -->|"Pod IP :49983"| Sandbox
-    Runtime -.-> Sandbox
-    NetPol -.-> Sandbox
+    subgraph K8s["Kubernetes · agent-sandbox"]
+        direction TB
+        CR["SandboxTemplate · SandboxWarmPool\nSandboxClaim"]
+        AS["agent-sandbox 控制器\ncore + extensions"]
+        Pod["沙箱 Pod · Kata VM\nmain + envd"]
+        PVC[("workspace PVC")]
+        Ingress["Service / Ingress"]
+    end
+
+    Hook["Webhook 端点"]
+
+    Dashboard --> API
+    RestClient --> API
+    Sdk --> API
+    Sdk -.->|"envd"| Proxy
+    Dashboard -.->|"终端"| Proxy
+
+    API -->|"写入 CR"| CR
+    CR -->|"由控制器 reconcile"| AS
+    AS -->|"创建"| Pod
+    Pod ---|"挂载"| PVC
+    API -->|"创建暴露"| Ingress
+    Ingress --> Pod
+    Proxy -->|"Pod IP :49983"| Pod
+
+    API --> Redis
+    Redis --> Worker
+    Worker --> Hook
 ```
 
-- **控制面。** `/api/v1` 管理模板、池、Webhook、端口暴露和沙箱生命周期；`/e2b` 把同一套服务适配给 E2B SDK。模板、池和 Webhook 的元数据存在 ConfigMap 中。
-- **沙箱生命周期。** API 写入 `SandboxTemplate`、`SandboxWarmPool` 和 `SandboxClaim`，由上游 [agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox) 控制器负责 Pod、PVC 和预热池供给。orchestrator 在 TTL 到期时暂停沙箱（删除 Pod、保留 PVC），恢复时在同一 PVC 上重建 Pod。REST 和 E2B 客户端不直接操作 Kubernetes 工作负载。
-- **数据面。** 启用 envd 后，每个沙箱在 `49983` 端口运行 envd 进程。orchestrator 负责鉴权并将流量代理到 Pod，路径为 `/api/v1/sandboxes/{id}/envd/*`，或通过 E2B 的域名路由。
-- **隔离。** 沙箱使用 Kata RuntimeClass、独立的 `/workspace` PVC，并可选配 NetworkPolicy 入向/出向白名单。
+- **控制面。** `/api/v1` 管理模板、池、端口暴露、Webhook 和沙箱生命周期；`/e2b` 把同一套服务暴露给 E2B 客户端。模板和 Webhook 元数据存在 ConfigMap 中，API 内的扫描任务负责暂停 TTL 到期的沙箱。
+- **沙箱层。** API 写入 `SandboxTemplate`、`SandboxWarmPool` 和 `SandboxClaim`；上游 [agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox) 控制器负责创建 Pod、PVC 和维护预热池。有预热沙箱时 claim 直接领取，否则冷启动。
+- **数据面。** 每个沙箱在 `49983` 端口运行 envd。orchestrator 鉴权后把终端、文件和进程流量代理到 Pod IP，路径为 `/api/v1/sandboxes/{id}/envd/*` 或 E2B 域名路由。
+- **隔离。** 沙箱运行在 Kata VM 中；`/workspace` 是每沙箱独立的 PVC，暂停和 TTL 到期都不会删除；模板级 NetworkPolicy 可限制入向/出向。
+
+| 路径 | 发生了什么 |
+|---|---|
+| 创建 | `SandboxClaim` → 领取预热或冷启动 → PVC + Pod 就绪 |
+| 使用 | 客户端 → orchestrator 代理 → `PodIP:49983`（envd） |
+| 暂停 / TTL | `operatingMode=Suspended` → Pod 删除、PVC 保留；恢复时重新挂载 |
 
 <br>
 
