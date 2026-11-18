@@ -72,6 +72,35 @@
   .card h3 { margin: 0 0 8px; font-size: 14px; }
   .card p { margin: 0; color: var(--muted); font-size: 12.5px; line-height: 1.6; }
   code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; color: var(--ink); background: #f1f5f9; padding: 1px 4px; border-radius: 4px; }
+
+  .lifecycle { margin-top: 18px; border: 1px solid var(--line); border-radius: 18px; background: var(--card); padding: 20px 22px 18px; }
+  .lifecycle h2 { margin: 0 0 4px; font-size: 18px; }
+  .lifecycle > p { margin: 0 0 14px; color: var(--muted); font-size: 12.5px; }
+  .state-diagram { overflow-x: auto; border: 1px solid var(--line); border-radius: 14px; background: #fcfdff; }
+  .state-diagram svg { display: block; width: 1600px; height: 400px; }
+  .state-node rect { fill: #f8fafc; stroke: #cbd5e1; stroke-width: 1.2; }
+  .state-node.running rect { fill: var(--data-soft); stroke: #bfe9da; }
+  .state-node.suspended rect { fill: var(--async-soft); stroke: #f2ddb3; }
+  .state-node.deleting rect { fill: #fff1f2; stroke: #fecdd3; }
+  .state-node.failed rect { fill: #fff1f2; stroke: #fecdd3; }
+  .state-node.deleted rect { fill: #f8fafc; stroke: #94a3b8; stroke-width: 2; }
+  .state-node .title { font-size: 14px; font-weight: 800; fill: var(--ink); letter-spacing: .02em; }
+  .state-node .body { font-size: 11.5px; fill: var(--muted); }
+  .state-edge { fill: none; stroke: #94a3b8; stroke-width: 1.5; }
+  .state-edge.resume { stroke: var(--control); }
+  .state-edge.delete { stroke: #e11d48; stroke-dasharray: 5 4; }
+  .state-edge.ttl { stroke: var(--control); stroke-dasharray: 5 4; }
+  .state-edge.label { font-size: 11px; font-weight: 700; fill: #64748b; }
+  .state-label { font-size: 11px; font-weight: 700; fill: #64748b; }
+  .transition-table { width: 100%; border-collapse: collapse; margin-top: 14px; font-size: 12.5px; }
+  .transition-table th, .transition-table td { text-align: left; padding: 9px 10px; border-bottom: 1px solid #e9eef6; vertical-align: top; }
+  .transition-table th { color: var(--muted); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
+  .transition-table td:first-child { font-weight: 700; white-space: nowrap; }
+  .transition-table tr:last-child td { border-bottom: none; }
+  .badge { display: inline-block; padding: 1px 7px; border-radius: 999px; background: #f1f5f9; color: #475569; font-size: 11px; font-weight: 700; }
+  .badge.run { background: var(--data-soft); color: #0b7a5d; }
+  .badge.stop { background: var(--async-soft); color: #a35a05; }
+  .badge.fail { background: #fff1f2; color: #be123c; }
   @media (max-width: 900px) { .foot { grid-template-columns: 1fr; } header { align-items: flex-start; flex-direction: column; } }
 </style>
 </head>
@@ -293,6 +322,131 @@
       <text class="note" x="56" y="836">请求路径：Client → Ingress → envd proxy → PodIP:49983 → envd → process / files / PTY</text>
     </svg>
   </div>
+
+
+  <section class="lifecycle" aria-labelledby="lifecycle-title">
+    <h2 id="lifecycle-title">Sandbox 生命周期</h2>
+    <p>公开状态与内部对象状态一一对应；TTL 只是把 RUNNING 转成 SUSPENDED，真正删除 PVC 的只有 DELETE。</p>
+
+    <div class="state-diagram">
+      <svg viewBox="0 0 1600 400" role="img" aria-label="Sandbox 状态机">
+        <defs>
+          <marker id="s-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#94a3b8"/>
+          </marker>
+          <marker id="s-arrow-c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#7c3aed"/>
+          </marker>
+          <marker id="s-arrow-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#e11d48"/>
+          </marker>
+        </defs>
+
+        <g class="state-node">
+          <rect x="70" y="100" width="170" height="76" rx="12"/>
+          <text x="86" y="124" class="title">PENDING</text>
+          <text x="86" y="144" class="body">claim 已创建</text>
+          <text x="86" y="160" class="body">等待 Sandbox / Pod</text>
+        </g>
+        <g class="state-node running">
+          <rect x="330" y="100" width="180" height="76" rx="12"/>
+          <text x="346" y="124" class="title">RUNNING</text>
+          <text x="346" y="144" class="body">Pod Ready</text>
+          <text x="346" y="160" class="body">envd 可访问</text>
+        </g>
+        <g class="state-node suspended">
+          <rect x="610" y="100" width="190" height="76" rx="12"/>
+          <text x="626" y="124" class="title">SUSPENDED</text>
+          <text x="626" y="144" class="body">Pod 已删除</text>
+          <text x="626" y="160" class="body">PVC 保留</text>
+        </g>
+        <g class="state-node deleting">
+          <rect x="910" y="100" width="170" height="76" rx="12"/>
+          <text x="926" y="124" class="title">DELETING</text>
+          <text x="926" y="144" class="body">deletionTimestamp</text>
+          <text x="926" y="160" class="body">回收子资源</text>
+        </g>
+        <g class="state-node deleted">
+          <rect x="1180" y="100" width="160" height="76" rx="12"/>
+          <rect x="1185" y="105" width="150" height="66" rx="9" fill="none" stroke="#cbd5e1" stroke-dasharray="3 3"/>
+          <text x="1196" y="124" class="title">DELETED</text>
+          <text x="1196" y="144" class="body">对象与 PVC</text>
+          <text x="1196" y="160" class="body">全部回收</text>
+        </g>
+        <g class="state-node failed">
+          <rect x="330" y="286" width="180" height="70" rx="12"/>
+          <text x="346" y="310" class="title">FAILED</text>
+          <text x="346" y="330" class="body">claim 不可恢复</text>
+          <text x="346" y="346" class="body">（InvalidMetadata）</text>
+        </g>
+
+        <!-- create / ready -->
+        <path class="state-edge" marker-end="url(#s-arrow)" d="M 240 138 H 330"/>
+        <text class="state-label" x="252" y="130">claim Ready</text>
+
+        <!-- run -> suspended -->
+        <path class="state-edge" marker-end="url(#s-arrow)" d="M 510 138 H 610"/>
+        <text class="state-label" x="514" y="130">suspend / TTL</text>
+
+        <!-- resume -->
+        <path class="state-edge resume" marker-end="url(#s-arrow-c)" d="M 705 176 V 220 H 420 V 176"/>
+        <text class="state-label" x="472" y="212">resume（重建 Pod）</text>
+
+        <!-- pod self loop -->
+        <path class="state-edge" marker-end="url(#s-arrow)" d="M 430 100 C 430 66, 470 66, 470 100"/>
+        <text class="state-label" x="480" y="76">Pod 重建 / spec 变更</text>
+
+        <!-- invalid -->
+        <path class="state-edge" marker-end="url(#s-arrow)" d="M 155 176 V 321 H 330"/>
+        <text class="state-label" x="168" y="300">claim InvalidMetadata</text>
+
+        <!-- pending TTL -->
+        <path class="state-edge ttl" marker-end="url(#s-arrow-c)" d="M 120 176 V 250 H 590 V 138 H 610"/>
+        <text class="state-label" x="300" y="244">TTL（Sandbox 已建、Pod 未就绪）</text>
+
+        <!-- delete bus -->
+        <path class="state-edge delete" marker-end="url(#s-arrow-r)" d="M 155 100 V 40 H 995 V 100"/>
+        <path class="state-edge delete" d="M 420 100 V 40"/>
+        <path class="state-edge delete" d="M 705 100 V 40"/>
+        <text class="state-label" x="760" y="34">DELETE / 创建等待超时</text>
+
+        <!-- failed delete -->
+        <path class="state-edge delete" marker-end="url(#s-arrow-r)" d="M 510 321 H 995 V 176"/>
+        <text class="state-label" x="760" y="314">delete</text>
+
+        <!-- deleting -> deleted -->
+        <path class="state-edge" marker-end="url(#s-arrow)" d="M 1080 138 H 1180"/>
+        <text class="state-label" x="1092" y="130">GC</text>
+      </svg>
+    </div>
+
+    <table class="transition-table">
+      <thead>
+        <tr><th>当前状态</th><th>事件 / 执行者</th><th>下一状态</th><th>副作用</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>∅</td><td><code>POST /api/v1/sandboxes</code> 或 <code>POST /e2b/sandboxes</code>（orchestrator）</td><td>PENDING</td><td>创建 <code>SandboxClaim</code>，写入模板、用户元数据、TTL 注解</td></tr>
+        <tr><td>PENDING</td><td>claim Ready（agent-sandbox controllers）</td><td>RUNNING</td><td>创建或领取 Sandbox/Pod；<code>volumeClaimTemplates</code> 创建 PVC</td></tr>
+        <tr><td>PENDING</td><td>TTL 到期且 Sandbox 已创建（orchestrator）</td><td>SUSPENDED</td><td>设置 <code>operatingMode=Suspended</code>；不创建 Pod，PVC 保留</td></tr>
+        <tr><td>PENDING</td><td>创建等待超时（orchestrator）或 <code>DELETE</code></td><td>DELETING</td><td>删除 claim；子资源由 GC 回收</td></tr>
+        <tr><td>PENDING</td><td>claim Ready=False / InvalidMetadata</td><td>FAILED</td><td>不创建 Pod；需要删除后重建</td></tr>
+        <tr><td>RUNNING</td><td><code>POST /suspend</code>、E2B <code>pause</code> 或 TTL 扫描（orchestrator）</td><td>SUSPENDED</td><td><code>operatingMode=Suspended</code>；Pod 删除，<b>PVC 保留</b></td></tr>
+        <tr><td>SUSPENDED</td><td><code>POST /resume</code> 或 E2B <code>connect</code></td><td>RUNNING</td><td><code>operatingMode=Running</code>；重建 Pod，挂回同一 PVC；重置 TTL 锚点</td></tr>
+        <tr><td>RUNNING</td><td>Pod 失败 / 模板变更（controllers）</td><td>RUNNING</td><td>重建 Pod；状态不变，PVC 不变</td></tr>
+        <tr><td>RUNNING / SUSPENDED / FAILED</td><td><code>DELETE /api/v1/sandboxes/{id}</code>（orchestrator）</td><td>DELETING</td><td>删除 exposes 与 claim；ownerReference 级联回收 Sandbox、Pod、PVC</td></tr>
+        <tr><td>DELETING</td><td>Kubernetes GC</td><td>DELETED</td><td>claim、Sandbox、Pod、PVC 全部消失</td></tr>
+        <tr><td>RUNNING / SUSPENDED</td><td><code>PUT /ttl</code>、<code>renew</code>（orchestrator）</td><td>不变</td><td>只更新 <code>ttl-anchor</code> / <code>ttl-seconds</code>，不改变运行状态</td></tr>
+        <tr><td>任意</td><td><code>lock</code> / <code>unlock</code></td><td>不变</td><td>只写 <code>resume-locked</code> 注解；阻止 resume，不阻止 suspend/delete</td></tr>
+      </tbody>
+    </table>
+
+    <p style="margin:12px 0 0;color:var(--muted);font-size:12px;line-height:1.6;">
+      公开状态映射：PENDING → <span class="badge">created</span>，RUNNING → <span class="badge run">running</span>，
+      SUSPENDED → <span class="badge stop">stopped</span>，FAILED → <span class="badge fail">exited</span>，
+      DELETING → <span class="badge">terminating</span>，DELETED → API 404。
+      预热池另有自己的对象生命周期（CREATING → AVAILABLE → ALLOCATED）；领取后 claim 取得 Sandbox 所有权，对外只暴露 claim 的 id。
+    </p>
+  </section>
 
   <div class="foot">
     <div class="card">
