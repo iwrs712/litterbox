@@ -92,7 +92,7 @@ Define a template, and Litterbox provisions an isolated sandbox on Kubernetes, m
 │  SUPPORTING SERVICES                                                                                        │
 │  ┌────────────────┐  ┌────────────────┐  ┌────────────────┐  ┌──────────────────────────────────────────┐  │
 │  │ ConfigMaps     │  │ TTL Sweeper    │  │ Redis Broker   │  │ Celery Worker → Webhook Endpoints       │  │
-│  │ Templates      │  │ Expiry / Renew │  │ Event Queue    │  │ Retry / Delivery                         │  │
+│  │ templates & hooks│  │ Expiry / Renew │  │ Event Queue    │  │ Retry / Delivery                         │  │
 │  └────────────────┘  └────────────────┘  └────────────────┘  └──────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 
