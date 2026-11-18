@@ -150,6 +150,10 @@ class SandboxService:
             if sandbox.expires_at > now:
                 continue
             try:
+                # Before the claim controller creates a Sandbox there is
+                # nothing to suspend. Retry on the next sweep once it exists.
+                if not self.crd.sandbox_name(sandbox.id):
+                    continue
                 cr = self.crd.get_cr(sandbox.id)
                 annotations = (cr.get("metadata") or {}).get("annotations") or {}
                 if annotations.get("litterbox.io/ttl-suspended-at"):

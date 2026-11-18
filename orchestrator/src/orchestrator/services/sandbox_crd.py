@@ -524,6 +524,9 @@ class SandboxCRDService:
             "spec": spec,
         }
 
+    def sandbox_name(self, sandbox_id: str) -> str:
+        return self._sandbox_name(sandbox_id)
+
     def _sandbox_name(self, sandbox_id: str) -> str:
         claim = self.claims.get(sandbox_id)
         return ((claim.get("status") or {}).get("sandbox") or {}).get("name", "")

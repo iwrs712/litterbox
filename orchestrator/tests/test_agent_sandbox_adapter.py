@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from datetime import timedelta
 from types import SimpleNamespace
 
 from orchestrator.config import Settings
 from orchestrator.domain.models import SandboxStatus, Template, WorkspaceConfig
 from orchestrator.infra.sandbox_pool_crd import SandboxPoolRepository
 from orchestrator.services.sandbox_crd import SandboxCRDService
+from orchestrator.services.sandboxes import SandboxService
 
 
 def settings() -> Settings:
@@ -229,3 +231,42 @@ def test_pool_repository_maps_warm_pool_and_hides_implicit() -> None:
         "failed": 0,
         "terminating": 1,
     }
+
+
+def test_suspend_expired_waits_for_a_sandbox_object() -> None:
+    from orchestrator.domain.models import SandboxStatus
+    from orchestrator.utils import utcnow
+
+    class FakeCRD:
+        def __init__(self) -> None:
+            self.sandbox = ""
+            self.suspended: list[str] = []
+
+        def list(self, _selector: str):
+            return [
+                SimpleNamespace(
+                    id="abc12345",
+                    status=SandboxStatus.RUNNING,
+                    terminating=False,
+                    ttl_seconds=60,
+                    expires_at=utcnow() - timedelta(seconds=1),
+                )
+            ]
+
+        def sandbox_name(self, _id: str) -> str:
+            return self.sandbox
+
+        def get_cr(self, _id: str):
+            return {"metadata": {"annotations": {}}}
+
+        def suspend(self, sandbox_id: str, *, ttl_expired: bool = False) -> None:
+            assert ttl_expired is True
+            self.suspended.append(sandbox_id)
+
+    service = object.__new__(SandboxService)
+    service.crd = FakeCRD()
+
+    assert service.suspend_expired() == 0
+    service.crd.sandbox = "sandbox-agent-xyz"
+    assert service.suspend_expired() == 1
+    assert service.crd.suspended == ["abc12345"]
