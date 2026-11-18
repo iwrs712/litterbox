@@ -1,0 +1,22 @@
+# syntax=docker/dockerfile:1.7
+#
+# Deployment image for the SigNoz/OpenTelemetry rollout. It reuses the
+# existing dependency layer and adds the OTel SDK + instrumentations, avoiding
+# a full `uv sync` rebuild while the upstream base image is unchanged.
+FROM registry.runlet.cn/litterbox/orchestrator-service:latest
+
+RUN pip install --no-cache-dir --index-url https://pypi.org/simple \
+    --timeout 60 --retries 3 \
+    opentelemetry-api==1.45.2 \
+    opentelemetry-sdk==1.45.2 \
+    opentelemetry-exporter-otlp-proto-http==1.45.2 \
+    opentelemetry-instrumentation-fastapi==0.66b2 \
+    opentelemetry-instrumentation-httpx==0.66b2 \
+    opentelemetry-instrumentation-celery==0.66b2
+
+RUN rm -rf /app/src
+COPY src /app/src
+COPY config.toml /app/config.toml
+COPY docker/entrypoint.sh /entrypoint.sh
+COPY docker/healthcheck.sh /healthcheck.sh
+RUN chmod +x /entrypoint.sh /healthcheck.sh

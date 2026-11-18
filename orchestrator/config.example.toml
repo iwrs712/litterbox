@@ -41,6 +41,20 @@ envd_version = "0.1.0"
 [ttl]
 default_ttl_seconds = 1800
 
+[telemetry]
+# Export traces, logs and metrics over OTLP/HTTP (SigNoz or an OTel Collector).
+# In Kubernetes this is enabled with ORCHESTRATOR__TELEMETRY__ENABLED=true and
+# OTEL_EXPORTER_OTLP_ENDPOINT, and OTEL_SERVICE_NAME per deployment.
+enabled = false
+endpoint = "http://localhost:4318"
+service_name = "litterbox-orchestrator"
+service_namespace = "litterbox"
+environment = "production"
+sample_ratio = 1.0
+export_interval_seconds = 15.0
+log_level = "INFO"
+excluded_urls = "health,metrics"
+
 [webhook]
 max_attempts = 5
 interval_ms = 200

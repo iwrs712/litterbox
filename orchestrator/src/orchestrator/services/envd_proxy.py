@@ -1,15 +1,25 @@
 from __future__ import annotations
 
+import json
+import logging
+import time
+import urllib.request
 from collections.abc import AsyncIterator
 from time import monotonic
 
 import httpx
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
+from opentelemetry import trace
+from opentelemetry.trace import Status, StatusCode
 from starlette.background import BackgroundTask
 from starlette.requests import Request
 
 from orchestrator.config import Settings
 from orchestrator.infra.kubernetes import KubernetesGateway
+from orchestrator.services.metrics import sandbox_metrics
+from orchestrator.telemetry import normalize_envd_path
+
+logger = logging.getLogger(__name__)
 
 
 class EnvdUpstreamUnavailableError(RuntimeError):
@@ -26,6 +36,10 @@ _HOP_BY_HOP_HEADERS = {
     b"transfer-encoding",
     b"upgrade",
 }
+
+# Small JSON error responses (e.g. envd's {"code": "restoring_workspace"})
+# are buffered so their error code can be attached to the span and metrics.
+_MAX_JSON_BUFFER = 64 * 1024
 
 
 def _connection_header_tokens(headers: list[tuple[bytes, bytes]]) -> set[bytes]:
@@ -135,27 +149,149 @@ class EnvdProxyService:
         if client is not None:
             await client.aclose()
 
+    def ensure_workspace_restored(self, sandbox_id: str) -> None:
+        """Open the envd workspace gate after a Pod start.
+
+        The sandbox-agent sidecar refuses process/filesystem calls until
+        ``POST /v1/workspace/restore`` has been called. With no object-storage
+        prefix configured, its local mode treats the mounted PVC as the
+        workspace and marks it ready immediately.
+        """
+        pod_ip = self._get_pod_ip(sandbox_id, force_refresh=True)
+        request = urllib.request.Request(
+            f"http://{pod_ip}:{self.settings.envd.port}/v1/workspace/restore",
+            data=b"{}",
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        timeout = max(self.settings.envd.connect_timeout_seconds, 5.0)
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            response.read()
+
     async def proxy(
         self,
         sandbox_id: str,
         envd_path: str,
         request: Request,
     ) -> StreamingResponse:
-        pod_ip = self._get_pod_ip(sandbox_id)
-        client = self._get_client()
+        tracer = trace.get_tracer(__name__)
+        span = tracer.start_span("envd.proxy")
+        started_at = time.perf_counter()
+        normalized_path = normalize_envd_path(envd_path)
+        pod_ip = ""
+        status_code: int | None = None
+        finished = False
+
+        span.set_attribute("litterbox.sandbox.id", sandbox_id)
+        span.set_attribute("litterbox.envd.path", normalized_path)
+        span.set_attribute("http.request.method", request.method)
+
+        def finish(*, error: str | None = None) -> None:
+            nonlocal finished
+            if finished:
+                return
+            finished = True
+            duration = time.perf_counter() - started_at
+            outcome = (
+                "success"
+                if error is None and (status_code is None or status_code < 500)
+                else "error"
+            )
+            span.set_attribute("litterbox.outcome", outcome)
+            if error is not None:
+                span.set_attribute("error.type", error)
+            if outcome == "error":
+                span.set_status(Status(StatusCode.ERROR, error or f"HTTP {status_code}"))
+            span.end()
+            sandbox_metrics.record_proxy(
+                method=request.method.upper(),
+                envd_path=normalized_path,
+                duration=duration,
+                status_code=status_code,
+                error=error,
+            )
 
         try:
-            upstream = await self._send(client, pod_ip, envd_path, request)
-        except httpx.RequestError as exc:
-            self._invalidate_pod_ip(sandbox_id, pod_ip)
-            if not self._can_retry(request, exc):
-                raise EnvdUpstreamUnavailableError("envd upstream unavailable") from exc
-            retry_pod_ip = self._get_pod_ip(sandbox_id, force_refresh=True)
+            pod_ip = self._get_pod_ip(sandbox_id)
+            client = self._get_client()
+
             try:
-                upstream = await self._send(client, retry_pod_ip, envd_path, request)
-            except httpx.RequestError as retry_exc:
-                self._invalidate_pod_ip(sandbox_id, retry_pod_ip)
-                raise EnvdUpstreamUnavailableError("envd upstream unavailable") from retry_exc
+                upstream = await self._send(client, pod_ip, envd_path, request)
+            except httpx.RequestError as exc:
+                self._invalidate_pod_ip(sandbox_id, pod_ip)
+                if not self._can_retry(request, exc):
+                    logger.warning(
+                        "envd upstream unavailable sandbox_id=%s path=%s error=%s",
+                        sandbox_id,
+                        normalized_path,
+                        exc,
+                    )
+                    raise EnvdUpstreamUnavailableError("envd upstream unavailable") from exc
+                retry_pod_ip = self._get_pod_ip(sandbox_id, force_refresh=True)
+                try:
+                    upstream = await self._send(client, retry_pod_ip, envd_path, request)
+                except httpx.RequestError as retry_exc:
+                    self._invalidate_pod_ip(sandbox_id, retry_pod_ip)
+                    logger.warning(
+                        "envd upstream unavailable after retry sandbox_id=%s path=%s error=%s",
+                        sandbox_id,
+                        normalized_path,
+                        retry_exc,
+                    )
+                    raise EnvdUpstreamUnavailableError("envd upstream unavailable") from retry_exc
+        except Exception as exc:  # noqa: BLE001
+            finish(error=type(exc).__name__)
+            if not isinstance(exc, EnvdUpstreamUnavailableError):
+                logger.warning(
+                    "envd proxy failed sandbox_id=%s path=%s error=%s",
+                    sandbox_id,
+                    normalized_path,
+                    exc,
+                )
+            raise
+
+        status_code = upstream.status_code
+        span.set_attribute("litterbox.pod.ip", pod_ip)
+        span.set_attribute("http.response.status_code", status_code)
+
+        content_type = upstream.headers.get("content-type", "").lower()
+        content_length = upstream.headers.get("content-length")
+        if "application/json" in content_type and content_length is not None:
+            try:
+                length = int(content_length)
+            except ValueError:
+                length = -1
+            if 0 <= length <= _MAX_JSON_BUFFER:
+                body_bytes = await upstream.aread()
+                await upstream.aclose()
+                span.set_attribute("http.response.body.size", len(body_bytes))
+                error_code: str | None = None
+                try:
+                    payload = json.loads(body_bytes)
+                except (ValueError, UnicodeDecodeError):
+                    payload = None
+                if isinstance(payload, dict):
+                    code = payload.get("code")
+                    if code and str(code).lower() not in {"ok", "success"}:
+                        error_code = str(code)
+                        message = str(payload.get("message", ""))[:256]
+                        span.set_attribute("litterbox.envd.error_code", error_code)
+                        if message:
+                            span.set_attribute("litterbox.envd.error_message", message)
+                        logger.warning(
+                            "envd upstream error sandbox_id=%s path=%s code=%s message=%s",
+                            sandbox_id,
+                            normalized_path,
+                            error_code,
+                            message,
+                        )
+                finish(error=error_code)
+                response = Response(content=body_bytes, status_code=upstream.status_code)
+                response.raw_headers = _filter_headers(
+                    list(upstream.headers.raw),
+                    request_headers=False,
+                )
+                return response
 
         closed = False
 
@@ -167,16 +303,28 @@ class EnvdProxyService:
             await upstream.aclose()
 
         async def body() -> AsyncIterator[bytes]:
+            body_bytes = 0
+            stream_error: str | None = None
             try:
                 async for chunk in upstream.aiter_raw():
+                    body_bytes += len(chunk)
                     yield chunk
+            except Exception as exc:  # noqa: BLE001
+                stream_error = type(exc).__name__
+                raise
             finally:
+                span.set_attribute("http.response.body.size", body_bytes)
                 await close_upstream()
+                finish(error=stream_error)
+
+        async def background() -> None:
+            await close_upstream()
+            finish()
 
         response = StreamingResponse(
             body(),
             status_code=upstream.status_code,
-            background=BackgroundTask(close_upstream),
+            background=BackgroundTask(background),
         )
         response.raw_headers = _filter_headers(
             list(upstream.headers.raw),

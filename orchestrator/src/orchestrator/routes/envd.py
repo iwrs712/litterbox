@@ -15,6 +15,7 @@ from orchestrator.infra.kubernetes import (
 )
 from orchestrator.responses import error
 from orchestrator.services.envd_proxy import EnvdUpstreamUnavailableError
+from orchestrator.telemetry import annotate_current_span, normalize_envd_path
 
 router = APIRouter(tags=["envd"])
 _METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
@@ -40,6 +41,12 @@ async def _proxy_envd(
     request: Request,
     container: Container,
 ):
+    annotate_current_span(
+        **{
+            "litterbox.sandbox.id": sandbox_id,
+            "litterbox.envd.path": normalize_envd_path(envd_path),
+        }
+    )
     try:
         sandbox = container.sandbox_service.get_sandbox(sandbox_id)
     except (KeyError, FileNotFoundError):

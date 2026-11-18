@@ -42,6 +42,7 @@ def build_container(settings: Settings | None = None) -> Container:
     expose_service = ServiceExposeService(gateway, sandbox_service, settings)
     sandbox_service.expose_service = expose_service
     envd_proxy_service = EnvdProxyService(settings, gateway)
+    sandbox_service.envd_proxy_service = envd_proxy_service
     e2b_service = E2BControlPlaneService(settings, sandbox_service, pool_service)
     return Container(
         settings=settings,

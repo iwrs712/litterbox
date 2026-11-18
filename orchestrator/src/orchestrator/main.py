@@ -13,6 +13,7 @@ from orchestrator.container import Container, build_container
 from orchestrator.domain.models import ApiResponse
 from orchestrator.responses import ok
 from orchestrator.routes import e2b, envd, exposes, metrics, pools, sandboxes, templates, webhooks
+from orchestrator.telemetry import configure_telemetry, shutdown_telemetry
 
 logger = logging.getLogger(__name__)
 API_PREFIX = "/api/v1"
@@ -68,6 +69,7 @@ async def lifespan(_: FastAPI):
         close_envd_proxy = getattr(envd_proxy_service, "aclose", None)
         if close_envd_proxy is not None:
             await close_envd_proxy()
+        shutdown_telemetry()
 
 
 app = FastAPI(title="Litterbox Orchestrator", version="1.0.0", lifespan=lifespan)
@@ -184,3 +186,8 @@ def root() -> JSONResponse:
 @app.get("/health")
 def health() -> JSONResponse:
     return ok(message="Litterbox API is running")
+
+
+# Install the SDK, OTLP exporters and FastAPI instrumentation once the app is
+# fully assembled (routers and middleware included).
+configure_telemetry("api", app=app)

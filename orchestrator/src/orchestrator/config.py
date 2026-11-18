@@ -85,6 +85,25 @@ class TTLConfig(BaseModel):
     worker_poll_interval_seconds: float = 2.0
 
 
+class TelemetryConfig(BaseModel):
+    """OpenTelemetry export settings.
+
+    The OTLP endpoint and service name may also be supplied through the
+    standard OTEL_EXPORTER_OTLP_ENDPOINT / OTEL_SERVICE_NAME environment
+    variables; these take precedence over the values below.
+    """
+
+    enabled: bool = False
+    endpoint: str = "http://localhost:4318"
+    service_name: str = "litterbox-orchestrator"
+    service_namespace: str = "litterbox"
+    environment: str = "production"
+    sample_ratio: float = Field(default=1.0, ge=0.0, le=1.0)
+    export_interval_seconds: float = Field(default=15.0, gt=0)
+    log_level: str = "INFO"
+    excluded_urls: str = "health,metrics"
+
+
 class WebhookConfig(BaseModel):
     max_attempts: int = 5
     interval_ms: int = 200
@@ -109,6 +128,7 @@ class Settings(BaseModel):
     envd: EnvdConfig = Field(default_factory=EnvdConfig)
     e2b: E2BConfig = Field(default_factory=E2BConfig)
     ttl: TTLConfig = Field(default_factory=TTLConfig)
+    telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
     webhook: WebhookConfig = Field(default_factory=WebhookConfig)
     celery: CeleryConfig = Field(default_factory=CeleryConfig)
     auth: AuthConfig = Field(default_factory=AuthConfig)

@@ -5,6 +5,7 @@ import logging
 
 from orchestrator.celery_app import celery_app
 from orchestrator.container import Container, build_container
+from orchestrator.telemetry import annotate_current_span
 
 logger = logging.getLogger(__name__)
 
@@ -30,9 +31,17 @@ def deliver_webhook_event(self, webhook_id: str, payload_data: dict) -> None:
       - ``interval_ms``  — fixed delay between attempts (countdown)
     """
     container = get_worker_container()
+    annotate_current_span(
+        **{
+            "litterbox.webhook.id": webhook_id,
+            "litterbox.event.type": payload_data.get("event_type", ""),
+            "litterbox.attempt": self.request.retries + 1,
+        }
+    )
     try:
         container.webhook_service.deliver(webhook_id, payload_data)
     except Exception as exc:  # noqa: BLE001
+        annotate_current_span(**{"litterbox.outcome": "retry"})
         # Fetch the webhook config to honour per-webhook retry settings.
         # If the webhook no longer exists, just log and stop.
         try:

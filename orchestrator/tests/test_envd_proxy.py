@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.trace import StatusCode
 from starlette.requests import Request
 
 import orchestrator.main as main_module
@@ -466,3 +472,74 @@ async def test_proxy_background_closes_upstream_when_body_is_not_consumed() -> N
     assert stream.closed is True
     await service.aclose()
     assert transport.closed is True
+
+
+def test_proxy_records_envd_json_error(monkeypatch) -> None:
+    body = json.dumps(
+        {"code": "restoring_workspace", "message": "not ready"}
+    ).encode()
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={
+                "content-type": "application/json",
+                "content-length": str(len(body)),
+            },
+            content=body,
+        )
+
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    tracer = provider.get_tracer("test")
+    patcher = patch(
+        "orchestrator.services.envd_proxy.trace.get_tracer", return_value=tracer
+    )
+    patcher.start()
+    try:
+        client, _ = build_test_client(monkeypatch, handler)
+        with client:
+            response = client.post(
+                "/api/v1/sandboxes/sbx-1/envd/v1/processes",
+                headers={"Authorization": "Bearer test-secret"},
+                json={"command": "sh"},
+            )
+
+        assert response.status_code == 200
+        assert response.json()["code"] == "restoring_workspace"
+
+        spans = {span.name: span for span in exporter.get_finished_spans()}
+        span = spans["envd.proxy"]
+        assert span.attributes["litterbox.envd.error_code"] == "restoring_workspace"
+        assert span.attributes["litterbox.envd.error_message"] == "not ready"
+        assert span.status.status_code is StatusCode.ERROR
+    finally:
+        patch.stopall()
+        provider.shutdown()
+
+
+def test_ensure_workspace_restored_posts_empty_json(monkeypatch) -> None:
+    calls: list[tuple[str, bytes | None, str, float | None]] = []
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return b'{"restored":true}'
+
+    def fake_urlopen(request, timeout=None):
+        calls.append((request.full_url, request.data, request.get_method(), timeout))
+        return FakeResponse()
+
+    monkeypatch.setattr(envd_proxy_module.urllib.request, "urlopen", fake_urlopen)
+    service = EnvdProxyService(Settings(envd=EnvdConfig(port=49983)), FakeGateway())
+    service.ensure_workspace_restored("sbx-1")
+
+    assert calls == [
+        ("http://10.42.0.8:49983/v1/workspace/restore", b"{}", "POST", 5.0)
+    ]

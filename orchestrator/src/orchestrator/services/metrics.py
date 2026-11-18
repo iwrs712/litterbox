@@ -7,6 +7,7 @@ Sandbox 创建指标收集器。
 
 存储：
   - Prometheus Histogram/Counter → /metrics（Prometheus scrape）
+  - OpenTelemetry Histogram/Counter → OTLP → SigNoz
   - 内存 deque（1h 滑动窗口）→ /api/v1/metrics/snapshot（前端轮询）
 """
 from __future__ import annotations
@@ -15,9 +16,68 @@ import time
 from collections import deque
 from dataclasses import dataclass
 from threading import Lock
-from typing import Deque, Literal
+from typing import Any, Deque, Literal
 
 from prometheus_client import Counter, Histogram
+
+from opentelemetry import metrics as otel_metrics
+
+# ── OTel 指标（与 Prometheus 并行上报到 SigNoz） ─────────────────
+#
+# Instruments are created lazily: the SDK/global MeterProvider is configured
+# during process startup, after this module is imported.
+
+_otel_instruments: dict[str, Any] | None = None
+
+
+def _otel() -> dict[str, Any]:
+    global _otel_instruments
+    if _otel_instruments is None:
+        meter = otel_metrics.get_meter("litterbox.orchestrator")
+        _otel_instruments = {
+            "create_duration": meter.create_histogram(
+                "litterbox.sandbox.create.duration",
+                unit="s",
+                description="End-to-end sandbox creation duration",
+            ),
+            "create_attempts": meter.create_counter(
+                "litterbox.sandbox.create.attempts",
+                unit="1",
+                description="Sandbox create attempts",
+            ),
+            "resume_duration": meter.create_histogram(
+                "litterbox.sandbox.resume.duration",
+                unit="s",
+                description="Sandbox resume duration",
+            ),
+            "resume_attempts": meter.create_counter(
+                "litterbox.sandbox.resume.attempts",
+                unit="1",
+                description="Sandbox resume attempts",
+            ),
+            "proxy_duration": meter.create_histogram(
+                "litterbox.envd.proxy.duration",
+                unit="s",
+                description="envd proxy upstream duration",
+            ),
+            "proxy_requests": meter.create_counter(
+                "litterbox.envd.proxy.requests",
+                unit="1",
+                description="envd proxy requests",
+            ),
+            "proxy_errors": meter.create_counter(
+                "litterbox.envd.proxy.errors",
+                unit="1",
+                description="envd proxy transport/upstream errors",
+            ),
+        }
+    return _otel_instruments
+
+
+def reset_otel_instruments() -> None:
+    """Testing hook: force instruments to bind to the current MeterProvider."""
+    global _otel_instruments
+    _otel_instruments = None
 
 # ── Prometheus 指标 ──────────────────────────────────────────────
 
@@ -79,6 +139,14 @@ class SandboxMetrics:
         SANDBOX_CREATE_TOTAL.labels(
             template_id=template_id, success=sl, source=source
         ).inc()
+        instruments = _otel()
+        attributes = {
+            "litterbox.template.id": template_id,
+            "litterbox.outcome": "success" if success else "failure",
+            "litterbox.source": source,
+        }
+        instruments["create_duration"].record(duration, attributes)
+        instruments["create_attempts"].add(1, attributes)
         ev = _CreateEvent(
             ts=time.time(),
             duration=duration,
@@ -89,6 +157,50 @@ class SandboxMetrics:
         with self._lock:
             self._creates.append(ev)
             self._evict()
+
+    def record_resume(
+        self,
+        *,
+        template_id: str,
+        duration: float,
+        success: bool,
+    ) -> None:
+        instruments = _otel()
+        attributes = {
+            "litterbox.template.id": template_id or "unknown",
+            "litterbox.outcome": "success" if success else "failure",
+        }
+        instruments["resume_duration"].record(duration, attributes)
+        instruments["resume_attempts"].add(1, attributes)
+
+    def record_proxy(
+        self,
+        *,
+        method: str,
+        envd_path: str,
+        duration: float,
+        status_code: int | None = None,
+        error: str | None = None,
+    ) -> None:
+        instruments = _otel()
+        outcome = (
+            "success"
+            if error is None and (status_code is None or status_code < 500)
+            else "error"
+        )
+        attributes: dict[str, Any] = {
+            "http.request.method": method,
+            "litterbox.envd.path": envd_path,
+            "litterbox.outcome": outcome,
+        }
+        if status_code is not None:
+            attributes["http.response.status_code"] = status_code
+        if error is not None:
+            attributes["error.type"] = error
+        instruments["proxy_duration"].record(duration, attributes)
+        instruments["proxy_requests"].add(1, attributes)
+        if outcome == "error":
+            instruments["proxy_errors"].add(1, attributes)
 
     def set_live_stats(self, stats: dict) -> None:
         """注入当前实时状态（由 snapshot 端点在调用前填入）。"""
