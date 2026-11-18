@@ -52,66 +52,69 @@ Define a template, and Litterbox provisions an isolated sandbox on Kubernetes, m
 
 ## Architecture
 
-```text
-┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│                                      LITTERBOX ARCHITECTURE                                                 │
-└─────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    accTitle: Litterbox Architecture
+    accDescr: Control plane for sandbox lifecycle and data plane for envd runtime access.
 
+    subgraph CP["CONTROL PLANE — Sandbox Lifecycle Management"]
+        direction LR
+        CC["Dashboard / E2B SDK"]
+        CI["Control Ingress"]
+        API["FastAPI Control API<br/>Create · Delete · Suspend/Resume · TTL/Lock"]
+        CRDs["Kubernetes CRDs<br/>Sandbox · Claim · Template · WarmPool"]
 
-┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│  CONTROL PLANE — Sandbox Lifecycle Management                                                               │
-│                                                                                                             │
-│  Dashboard / E2B SDK                                                                                        │
-│          │                                                                                                  │
-│          ▼                                                                                                  │
-│  ┌─────────────────┐     ┌────────────────────┐     ┌──────────────────┐                                   │
-│  │ Control Ingress │────▶│ FastAPI Control API│────▶│ Kubernetes CRDs  │                                   │
-│  │                 │     │                    │     │                  │                                   │
-│  └─────────────────┘     │ Create             │     │ Sandbox          │                                   │
-│                          │ Delete             │     │ Claim            │                                   │
-│                          │ Suspend / Resume   │     │ Template         │                                   │
-│                          │ TTL / Lock         │     │ WarmPool         │                                   │
-│                          └────────────────────┘     └────────┬─────────┘                                   │
-│                                                             │                                               │
-│                                                             ▼                                               │
-│             ┌───────────────────────────────────────────────────────────────────────────────┐               │
-│             │                    agent-sandbox Controllers                                  │               │
-│             │                    (core + extensions)                                        │               │
-│             │                                                                               │               │
-│             │    ┌────────────────────────────────┐       ┌────────────────────────────┐    │               │
-│             │    │          Sandbox Pod           │       │       Workspace PVC        │    │               │
-│             │    │                                │       │                            │    │               │
-│             │    │  Kata VM                       │       │  Persistent Workspace      │    │               │
-│             │    │  main container                │◀─────▶│  Suspend: keep PVC         │    │               │
-│             │    │  envd :49983                   │       │  Resume: re-attach         │    │               │
-│             │    │                                │       │  Delete: cascade           │    │               │
-│             │    └────────────────────────────────┘       └────────────────────────────┘    │               │
-│             │                                                                               │               │
-│             └───────────────────────────────────────────────────────────────────────────────┘               │
-│                                                                                                             │
-│  SUPPORTING SERVICES                                                                                        │
-│  ┌────────────────┐  ┌────────────────┐  ┌────────────────┐  ┌──────────────────────────────────────────┐  │
-│  │ ConfigMaps     │  │ TTL Sweeper    │  │ Redis Broker   │  │ Celery Worker → Webhook Endpoints       │  │
-│  │ templates & hooks│  │ Expiry / Renew │  │ Event Queue    │  │ Retry / Delivery                         │  │
-│  └────────────────┘  └────────────────┘  └────────────────┘  └──────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+        subgraph CTRL["agent-sandbox Controllers<br/>(core + extensions)"]
+            direction LR
+            POD["Sandbox Pod<br/>Kata VM · main container · envd :49983"]
+            PVC[("Workspace PVC<br/>Persistent Workspace<br/>Suspend: kept · Resume: re-attached · Delete: cascade")]
+            POD <--> PVC
+        end
 
+        subgraph SUPPORT["SUPPORTING SERVICES"]
+            direction LR
+            CM["ConfigMaps<br/>templates & hooks"]
+            TTL["TTL Sweeper<br/>Expiry / Renew"]
+            REDIS[("Redis Broker<br/>Event Queue")]
+            WORKER["Celery Worker<br/>Retry / Delivery"]
+            HOOK["Webhook Endpoints"]
+        end
 
-┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│  DATA PLANE — Sandbox Runtime Access                                                                        │
-│                                                                                                             │
-│  E2B SDK / Terminal                                                                                        │
-│          │                                                                                                  │
-│          ▼                                                                                                  │
-│  ┌─────────────────┐     ┌────────────────────┐     ┌──────────────────────┐     ┌──────────────────────┐ │
-│  │ Data Ingress    │────▶│ envd Proxy         │────▶│ Sandbox Pod          │────▶│ Runtime Operations   │ │
-│  │ envd Route      │     │                    │     │ envd :49983          │     │                      │ │
-│  └─────────────────┘     │ Auth / Streaming   │     │ ConnectRPC / REST    │     │ Process / Exec       │ │
-│                          │ Pod Routing        │     │                      │     │ Files / Workspace    │ │
-│                          └────────────────────┘     └──────────────────────┘     │ PTY / ACP             │ │
-│                                                                                  └──────────────────────┘ │
-│                                                                                                             │
-└─────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+        CC --> CI --> API
+        API --> CRDs
+        CRDs --> POD
+        API --> CM
+        API --> TTL
+        API --> REDIS
+        REDIS --> WORKER --> HOOK
+    end
+
+    subgraph DP["DATA PLANE — Sandbox Runtime Access"]
+        direction LR
+        DC["E2B SDK / Terminal"]
+        DI["Data Ingress<br/>envd Route"]
+        PROXY["envd Proxy<br/>Auth / Streaming<br/>Pod Routing"]
+        DPOD["Sandbox Pod<br/>envd :49983<br/>ConnectRPC / REST"]
+        RT["Runtime Operations<br/>Process / Exec<br/>Files / Workspace<br/>PTY / ACP"]
+        DC --> DI --> PROXY -->|"Pod IP :49983"| DPOD --> RT
+    end
+
+    CP ~~~ DP
+
+    classDef control fill:#eef4ff,stroke:#4a6fa5,color:#1f2a3d;
+    classDef data fill:#eefaf4,stroke:#2f8f6b,color:#12352a;
+    classDef storage fill:#fff7e6,stroke:#b07b1e,color:#3d2a0a;
+    classDef async fill:#f6eefc,stroke:#7b4fa5,color:#2e1a3d;
+    classDef api fill:#dbe7ff,stroke:#4a6fa5,color:#1f2a3d;
+    class CC,CI,API,CRDs,POD control;
+    class DC,DI,PROXY,DPOD,RT data;
+    class PVC storage;
+    class CM,TTL,REDIS,WORKER,HOOK async;
+    class API api;
+    style CP fill:#f8faff,stroke:#c7d2e5
+    style DP fill:#f5fbf8,stroke:#c6e3d6
+    style CTRL fill:#f3f7ff,stroke:#9db6d9
+    style SUPPORT fill:#faf7ff,stroke:#c9b8e3
 ```
 
 - **Control plane.** `/api/v1` manages templates, pools, exposes, webhooks and sandbox lifecycle; `/e2b` exposes the same services to E2B clients. Template and webhook metadata live in ConfigMaps, and a sweeper in the API pauses sandboxes whose TTL expired.
