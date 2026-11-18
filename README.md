@@ -99,6 +99,8 @@ flowchart LR
 | Use | client → orchestrator proxy → `PodIP:49983` (envd) |
 | Pause / TTL | `operatingMode=Suspended` → Pod deleted, PVC kept; resume reattaches it |
 
+A larger, annotated version is available at [docs/architecture.html](docs/architecture.html).
+
 <br>
 
 ## Quick Start

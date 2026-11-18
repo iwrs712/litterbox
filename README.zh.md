@@ -99,6 +99,8 @@ flowchart LR
 | 使用 | 客户端 → orchestrator 代理 → `PodIP:49983`（envd） |
 | 暂停 / TTL | `operatingMode=Suspended` → Pod 删除、PVC 保留；恢复时重新挂载 |
 
+完整标注版：[docs/architecture.html](docs/architecture.html)。
+
 <br>
 
 ## 快速开始

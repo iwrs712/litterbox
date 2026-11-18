@@ -1,628 +1,313 @@
 <!doctype html>
 <html lang="zh-CN">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Litterbox Architecture</title>
-  <style>
-    :root {
-      --bg: #f5f7fb;
-      --ink: #172033;
-      --muted: #667085;
-      --line: #d9dfeb;
-      --control: #7c3aed;
-      --control-soft: #f3e8ff;
-      --data: #0f9f7a;
-      --data-soft: #e7fbf4;
-      --state: #d97706;
-      --state-soft: #fff7e6;
-      --k8s: #2563eb;
-      --k8s-soft: #edf4ff;
-      --external: #64748b;
-      --external-soft: #f8fafc;
-    }
-
-    * { box-sizing: border-box; }
-
-    body {
-      margin: 0;
-      color: var(--ink);
-      background:
-        radial-gradient(circle at 8% 0%, rgba(124, 58, 237, .09), transparent 28rem),
-        radial-gradient(circle at 92% 100%, rgba(15, 159, 122, .09), transparent 30rem),
-        var(--bg);
-      font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
-    }
-
-    .page {
-      width: min(1880px, calc(100vw - 32px));
-      margin: 24px auto 48px;
-    }
-
-    header {
-      display: flex;
-      align-items: flex-end;
-      justify-content: space-between;
-      gap: 24px;
-      padding: 8px 4px 20px;
-    }
-
-    .eyebrow {
-      margin: 0 0 8px;
-      color: var(--control);
-      font-size: 12px;
-      font-weight: 800;
-      letter-spacing: .14em;
-      text-transform: uppercase;
-    }
-
-    h1 {
-      margin: 0;
-      font-size: clamp(28px, 4vw, 46px);
-      letter-spacing: -.035em;
-    }
-
-    .subtitle {
-      max-width: 760px;
-      margin: 10px 0 0;
-      color: var(--muted);
-      font-size: 15px;
-      line-height: 1.7;
-    }
-
-    .toolbar {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      padding-bottom: 4px;
-    }
-
-    button {
-      border: 1px solid var(--line);
-      border-radius: 999px;
-      background: rgba(255,255,255,.86);
-      color: var(--muted);
-      cursor: pointer;
-      font: inherit;
-      font-size: 13px;
-      font-weight: 650;
-      padding: 8px 13px;
-      transition: .16s ease;
-    }
-
-    button:hover { transform: translateY(-1px); border-color: #b8c1d2; }
-    button.active { color: white; background: var(--ink); border-color: var(--ink); }
-
-    .legend {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 18px;
-      padding: 0 4px 14px;
-      color: var(--muted);
-      font-size: 12px;
-    }
-
-    .legend span { display: inline-flex; align-items: center; gap: 7px; }
-    .dot { width: 9px; height: 9px; border-radius: 50%; }
-    .dot.control { background: var(--control); }
-    .dot.data { background: var(--data); }
-    .dot.state { background: var(--state); }
-    .dot.k8s { background: var(--k8s); }
-
-    .scroll {
-      overflow-x: auto;
-      border-radius: 22px;
-      box-shadow: 0 22px 55px rgba(23, 32, 51, .12);
-    }
-
-    .diagram {
-      position: relative;
-      width: 1800px;
-      height: 1080px;
-      overflow: hidden;
-      border: 1px solid #e0e5ee;
-      border-radius: 22px;
-      background: rgba(255,255,255,.9);
-    }
-
-    .lane {
-      position: absolute;
-      left: 20px;
-      width: 1760px;
-      border: 1px solid rgba(124, 58, 237, .2);
-      border-radius: 18px;
-      background: linear-gradient(135deg, rgba(243,232,255,.55), rgba(255,255,255,.7));
-    }
-
-    .control-lane { top: 20px; height: 496px; }
-    .data-lane {
-      top: 548px;
-      height: 512px;
-      border-color: rgba(15, 159, 122, .22);
-      background: linear-gradient(135deg, rgba(231,251,244,.66), rgba(255,255,255,.72));
-    }
-
-    .lane-title {
-      position: absolute;
-      left: 24px;
-      top: 16px;
-      font-size: 15px;
-      font-weight: 850;
-      letter-spacing: .02em;
-    }
-
-    .control-lane .lane-title { color: var(--control); }
-    .data-lane .lane-title { color: var(--data); }
-
-    .lane-kicker {
-      color: var(--muted);
-      font-size: 11px;
-      font-weight: 600;
-      letter-spacing: .04em;
-      margin-left: 9px;
-    }
-
-    .node, .node-group {
-      position: absolute;
-      z-index: 3;
-      border: 1.5px solid var(--line);
-      border-radius: 13px;
-      background: rgba(255,255,255,.96);
-      box-shadow: 0 6px 18px rgba(23, 32, 51, .07);
-      transition: opacity .2s ease, transform .2s ease, box-shadow .2s ease;
-    }
-
-    .node { display: flex; flex-direction: column; justify-content: center; padding: 10px 12px; }
-    .node:hover, .node-group:hover { transform: translateY(-2px); box-shadow: 0 10px 24px rgba(23,32,51,.12); }
-    .node strong { display: block; font-size: 13px; line-height: 1.25; }
-    .node small { display: block; margin-top: 5px; color: var(--muted); font-size: 10.5px; line-height: 1.35; }
-    .node code { font-size: 10.5px; color: #475467; }
-
-    .node.control { border-color: rgba(124,58,237,.34); background: #fcfaff; }
-    .node.data { border-color: rgba(15,159,122,.35); background: #fbfffd; }
-    .node.state { border-color: rgba(217,119,6,.32); background: #fffdf7; }
-    .node.k8s { border-color: rgba(37,99,235,.3); background: #fbfdff; }
-    .node.external { border-color: rgba(100,116,139,.3); background: #fcfdff; }
-
-    .node-group {
-      padding: 0;
-      background: rgba(255,255,255,.58);
-      box-shadow: none;
-    }
-
-    .group-title {
-      position: absolute;
-      top: 10px;
-      left: 13px;
-      font-size: 11px;
-      font-weight: 800;
-      letter-spacing: .02em;
-      color: #475467;
-    }
-
-    .tag {
-      display: inline-flex;
-      width: fit-content;
-      margin-top: 7px;
-      border-radius: 999px;
-      padding: 2px 7px;
-      font-size: 9px;
-      font-weight: 800;
-      letter-spacing: .04em;
-      color: var(--control);
-      background: var(--control-soft);
-    }
-    .tag.data { color: var(--data); background: var(--data-soft); }
-    .tag.state { color: var(--state); background: var(--state-soft); }
-
-    .clients-panel {
-      left: 30px;
-      top: 66px;
-      width: 220px;
-      height: 388px;
-      border-color: rgba(99,102,241,.28);
-      background: rgba(238,242,255,.58);
-    }
-    .clients-panel .group-title { position: static; padding: 12px 14px 0; }
-    .clients-panel .node { width: 180px; left: 20px; }
-
-    .card-dashboard { top: 54px; height: 80px; }
-    .card-rest { top: 151px; height: 68px; }
-    .card-sdk { top: 236px; height: 112px; }
-
-    #ctrl-auth { left: 300px; top: 142px; width: 150px; height: 86px; }
-    #native-api { left: 492px; top: 91px; width: 210px; height: 75px; }
-    #e2b-api { left: 492px; top: 202px; width: 210px; height: 75px; }
-
-    #services-group { left: 740px; top: 65px; width: 330px; height: 310px; }
-    .service-card { width: 140px; height: 58px; padding: 8px 10px; }
-    .service-card strong { font-size: 11.5px; }
-    .service-card small { margin-top: 2px; font-size: 9px; }
-    #svc-template { left: 15px; top: 48px; }
-    #svc-sandbox  { left: 170px; top: 48px; }
-    #svc-pool     { left: 15px; top: 120px; }
-    #svc-e2b      { left: 170px; top: 120px; }
-    #svc-expose   { left: 15px; top: 192px; }
-    #svc-webhook  { left: 170px; top: 192px; }
-
-    #configmaps { left: 730px; top: 405px; width: 145px; height: 57px; }
-    #redis { left: 892px; top: 405px; width: 145px; height: 57px; }
-    #controllers { left: 1077px; top: 232px; width: 190px; height: 90px; }
-    #workers { left: 1077px; top: 384px; width: 190px; height: 90px; }
-    #ctrl-k8s-api { left: 1110px; top: 118px; width: 158px; height: 82px; }
-    #ctrl-k8s-connector { left: 1316px; top: 154px; width: 72px; height: 10px; opacity: 0; }
-    #webhook-target { left: 1371px; top: 395px; width: 165px; height: 62px; }
-
-    #resources-group { left: 1420px; top: 65px; width: 310px; height: 292px; }
-    .resource-card { width: 132px; height: 68px; padding: 8px 9px; }
-    .resource-card strong { font-size: 11px; }
-    .resource-card small { font-size: 9px; }
-    #res-deploy { left: 14px; top: 50px; }
-    #res-service { left: 158px; top: 50px; }
-    #res-pvc { left: 14px; top: 132px; }
-    #res-pod { left: 158px; top: 132px; }
-    #res-runtime { left: 14px; top: 214px; width: 276px; height: 58px; }
-
-    #data-dashboard { top: 64px; height: 82px; }
-    #data-sdk { top: 158px; height: 106px; }
-    #data-clients { height: 292px; }
-
-    #data-auth { left: 300px; top: 146px; width: 155px; height: 82px; }
-    #envd-proxy { left: 510px; top: 108px; width: 205px; height: 122px; }
-    #pod-lookup { left: 510px; top: 292px; width: 205px; height: 76px; }
-    #data-sandbox { left: 780px; top: 62px; width: 610px; height: 350px; }
-    #main-container { left: 24px; top: 216px; width: 170px; height: 62px; }
-    #envd { left: 24px; top: 92px; width: 170px; height: 78px; }
-    #files-api { left: 235px; top: 50px; width: 165px; height: 62px; }
-    #process-api { left: 235px; top: 132px; width: 165px; height: 62px; }
-    #pty-api { left: 235px; top: 214px; width: 165px; height: 62px; }
-    #workspace-pvc { left: 440px; top: 122px; width: 145px; height: 84px; }
-    .sandbox-badge { position: absolute; z-index: 3; border-radius: 999px; padding: 4px 9px; font-size: 9px; font-weight: 750; }
-    #runtime-class { left: 24px; top: 302px; color: #2459bb; background: #edf4ff; }
-    #network-policy { left: 134px; top: 302px; color: #2459bb; background: #edf4ff; }
-
-    .edge { fill: none; stroke-width: 1.65; opacity: .9; }
-    .edge-control { stroke: var(--control); }
-    .edge-data { stroke: var(--data); }
-    .edge-k8s { stroke: var(--k8s); }
-    .edge-muted { stroke: var(--external); stroke-dasharray: 5 5; }
-    .edge-label {
-      font-size: 10px;
-      font-weight: 650;
-      fill: #667085;
-      paint-order: stroke;
-      stroke: rgba(255,255,255,.96);
-      stroke-width: 5px;
-      stroke-linejoin: round;
-    }
-    #edges { position: absolute; inset: 0; width: 1800px; height: 1080px; z-index: 2; pointer-events: none; }
-    .node, .node-group, .lane-title, .clients-panel, .sandbox-badge { z-index: 3; }
-
-    .diagram[data-mode="control"] .data-only { opacity: .12; }
-    .diagram[data-mode="data"] .control-only { opacity: .12; }
-    .diagram[data-mode="control"] .edge-data { opacity: .08; }
-    .diagram[data-mode="data"] .edge-control { opacity: .08; }
-    .diagram[data-mode="control"] .data-lane { opacity: .24; }
-    .diagram[data-mode="data"] .control-lane { opacity: .24; }
-
-    .footnote {
-      margin: 14px 4px 0;
-      color: var(--muted);
-      font-size: 12px;
-      line-height: 1.6;
-    }
-  </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Litterbox 架构全景</title>
+<style>
+  :root {
+    --bg: #f4f6fb;
+    --card: #ffffff;
+    --ink: #16213a;
+    --muted: #667085;
+    --line: #d7deeb;
+    --control: #7c3aed;
+    --control-soft: #f5f0ff;
+    --data: #0f9f7a;
+    --data-soft: #ebfaf5;
+    --async: #d97706;
+    --async-soft: #fff8e8;
+    --infra: #2563eb;
+    --infra-soft: #eef4ff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    color: var(--ink);
+    background:
+      radial-gradient(circle at 8% 0%, rgba(124, 58, 237, .08), transparent 30rem),
+      radial-gradient(circle at 90% 100%, rgba(15, 159, 122, .08), transparent 32rem),
+      var(--bg);
+    font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
+  }
+  .page { width: min(1640px, calc(100vw - 32px)); margin: 28px auto 48px; }
+  header { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; padding: 0 4px 18px; }
+  .eyebrow { margin: 0 0 8px; color: var(--control); font-size: 12px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
+  h1 { margin: 0; font-size: 30px; letter-spacing: -.01em; }
+  .sub { margin: 8px 0 0; color: var(--muted); font-size: 14px; }
+  .legend { display: flex; gap: 8px; flex-wrap: wrap; }
+  .legend span { display: inline-flex; align-items: center; gap: 7px; padding: 7px 11px; border: 1px solid var(--line); border-radius: 999px; background: var(--card); font-size: 12px; color: var(--muted); }
+  .legend i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+  .legend .c { background: var(--control); } .legend .d { background: var(--data); }
+  .legend .a { background: var(--async); } .legend .s { background: var(--infra); }
+  .diagram { overflow-x: auto; border: 1px solid var(--line); border-radius: 20px; background: var(--card); box-shadow: 0 18px 40px -28px rgba(22, 33, 58, .35); }
+  svg { display: block; width: 1600px; height: 1000px; }
+  .band { fill: #fbfaff; stroke: #e4dcff; stroke-width: 1.2; }
+  .band.data { fill: #f7fdfb; stroke: #d2f0e6; }
+  .band-label { font-size: 12px; font-weight: 800; letter-spacing: .14em; fill: var(--control); }
+  .band.data .band-label { fill: var(--data); }
+  .zone { fill: none; stroke: #c7d6f5; stroke-width: 1.2; stroke-dasharray: 5 4; }
+  .zone-label { font-size: 11px; font-weight: 700; letter-spacing: .08em; fill: #4b6aa8; }
+  .node rect { stroke-width: 1.1; }
+  .node.control rect { fill: var(--control-soft); stroke: #d8c9fb; }
+  .node.data rect { fill: var(--data-soft); stroke: #bfe9da; }
+  .node.async rect { fill: var(--async-soft); stroke: #f2ddb3; }
+  .node.infra rect { fill: var(--infra-soft); stroke: #c9dbfb; }
+  .node.store rect { fill: #f8fafc; stroke: #cbd5e1; }
+  .node .title { font-size: 14px; font-weight: 700; fill: var(--ink); }
+  .node .body { font-size: 11.5px; fill: var(--muted); }
+  .node .tag { font-size: 10px; font-weight: 800; letter-spacing: .08em; }
+  .node.control .tag { fill: var(--control); } .node.data .tag { fill: var(--data); }
+  .node.async .tag { fill: var(--async); } .node.infra .tag { fill: var(--infra); }
+  .edge { fill: none; stroke: #94a3b8; stroke-width: 1.5; }
+  .edge.control { stroke: var(--control); }
+  .edge.data { stroke: var(--data); }
+  .edge.async { stroke: var(--async); }
+  .edge.dashed { stroke-dasharray: 5 4; }
+  .edge-label { font-size: 10.5px; font-weight: 700; fill: #64748b; }
+  .note { font-size: 12px; fill: var(--muted); }
+  .note strong { fill: var(--ink); font-weight: 700; }
+  .foot { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-top: 18px; }
+  .card { border: 1px solid var(--line); border-radius: 14px; background: var(--card); padding: 16px 18px; }
+  .card h3 { margin: 0 0 8px; font-size: 14px; }
+  .card p { margin: 0; color: var(--muted); font-size: 12.5px; line-height: 1.6; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; color: var(--ink); background: #f1f5f9; padding: 1px 4px; border-radius: 4px; }
+  @media (max-width: 900px) { .foot { grid-template-columns: 1fr; } header { align-items: flex-start; flex-direction: column; } }
+</style>
 </head>
 <body>
 <div class="page">
   <header>
     <div>
-      <p class="eyebrow">System Architecture</p>
-      <h1>Litterbox 架构</h1>
-      <p class="subtitle">
-        控制面负责管理 Sandbox 的期望状态；数据面负责在已经就绪的 Sandbox 内执行命令、读写文件并提供 PTY。
-        同一套 Dashboard 和 E2B SDK 会按操作类型进入不同链路。
-      </p>
+      <p class="eyebrow">Litterbox</p>
+      <h1>架构全景</h1>
+      <p class="sub">控制面负责编排，数据面负责执行；两条链路在 Sandbox Pod 汇合。</p>
     </div>
-    <div class="toolbar" role="group" aria-label="链路高亮">
-      <button class="active" data-mode="all">全部</button>
-      <button data-mode="control">只看控制面</button>
-      <button data-mode="data">只看数据面</button>
+    <div class="legend" aria-label="图例">
+      <span><i class="c"></i>控制面</span>
+      <span><i class="d"></i>数据面</span>
+      <span><i class="a"></i>异步</span>
+      <span><i class="s"></i>基础设施</span>
     </div>
   </header>
 
-  <div class="legend">
-    <span><i class="dot control"></i>控制面</span>
-    <span><i class="dot data"></i>数据面</span>
-    <span><i class="dot state"></i>状态存储</span>
-    <span><i class="dot k8s"></i>Kubernetes</span>
-    <span>虚线表示解析、创建或异步关系</span>
+  <div class="diagram">
+    <svg viewBox="0 0 1600 880" role="img" aria-label="Litterbox 控制面与数据面架构图">
+      <defs>
+        <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#94a3b8"/>
+        </marker>
+        <marker id="arrow-c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#7c3aed"/>
+        </marker>
+        <marker id="arrow-d" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#0f9f7a"/>
+        </marker>
+        <marker id="arrow-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#d97706"/>
+        </marker>
+      </defs>
+
+      <!-- control plane band -->
+      <rect class="band" x="32" y="24" width="1536" height="400" rx="18"/>
+      <text class="band-label" x="56" y="52">CONTROL PLANE</text>
+      <text class="note" x="56" y="70">模板 / 池 / 暴露 / Webhook / TTL · 只写期望状态，不碰用户进程</text>
+
+      <!-- control main line -->
+      <g class="node control">
+        <rect x="56" y="150" width="160" height="76" rx="10"/>
+        <text class="tag" x="70" y="170">CLIENTS</text>
+        <text x="70" y="192" class="title">Dashboard · REST</text>
+        <text x="70" y="210" class="body">E2B SDK</text>
+      </g>
+      <g class="node control">
+        <rect x="256" y="150" width="140" height="76" rx="10"/>
+        <text class="tag" x="270" y="170">EDGE</text>
+        <text x="270" y="192" class="title">Ingress</text>
+        <text x="270" y="210" class="body">control routes</text>
+      </g>
+      <g class="node control">
+        <rect x="436" y="132" width="250" height="112" rx="10"/>
+        <text class="tag" x="452" y="154">FASTAPI</text>
+        <text x="452" y="176" class="title">Control API</text>
+        <text x="452" y="196" class="body">auth · /api/v1 · /e2b</text>
+        <text x="452" y="214" class="body">templates · pools · exposes</text>
+        <text x="452" y="232" class="body">webhooks · TTL sweeper</text>
+      </g>
+
+      <!-- k8s control zone -->
+      <rect class="zone" x="726" y="112" width="830" height="256" rx="14"/>
+      <text class="zone-label" x="746" y="134">KUBERNETES · AGENT-SANDBOX</text>
+
+      <g class="node infra">
+        <rect x="746" y="150" width="200" height="84" rx="10"/>
+        <text class="tag" x="760" y="170">CRDS</text>
+        <text x="760" y="192" class="title">Sandbox · Claim</text>
+        <text x="760" y="210" class="body">Template · WarmPool</text>
+        <text x="760" y="226" class="body">期望状态</text>
+      </g>
+      <g class="node infra">
+        <rect x="986" y="150" width="206" height="84" rx="10"/>
+        <text class="tag" x="1000" y="170">UPSTREAM</text>
+        <text x="1000" y="192" class="title">agent-sandbox</text>
+        <text x="1000" y="210" class="body">controllers</text>
+        <text x="1000" y="226" class="body">core + extensions</text>
+      </g>
+      <g class="node infra">
+        <rect x="1232" y="150" width="190" height="84" rx="10"/>
+        <text class="tag" x="1246" y="170">WORKLOAD</text>
+        <text x="1246" y="192" class="title">Pod lifecycle</text>
+        <text x="1246" y="210" class="body">Kata VM</text>
+        <text x="1246" y="226" class="body">workspace PVC</text>
+      </g>
+
+      <!-- side effects row -->
+      <g class="node store">
+        <rect x="436" y="320" width="180" height="66" rx="10"/>
+        <text class="tag" x="450" y="340">STATE</text>
+        <text x="450" y="362" class="title">ConfigMaps</text>
+        <text x="450" y="378" class="body">templates · webhooks</text>
+      </g>
+      <g class="node control">
+        <rect x="646" y="320" width="176" height="66" rx="10"/>
+        <text class="tag" x="660" y="340">SWEEPER</text>
+        <text x="660" y="362" class="title">TTL sweeper</text>
+        <text x="660" y="378" class="body">expiry → suspend</text>
+      </g>
+      <g class="node async">
+        <rect x="852" y="320" width="120" height="66" rx="10"/>
+        <text class="tag" x="866" y="340">BROKER</text>
+        <text x="866" y="362" class="title">Redis</text>
+        <text x="866" y="378" class="body">webhook queue</text>
+      </g>
+      <g class="node async">
+        <rect x="1002" y="320" width="150" height="66" rx="10"/>
+        <text class="tag" x="1016" y="340">WORKER</text>
+        <text x="1016" y="362" class="title">Celery worker</text>
+        <text x="1016" y="378" class="body">retry · delivery</text>
+      </g>
+      <g class="node async">
+        <rect x="1182" y="320" width="170" height="66" rx="10"/>
+        <text class="tag" x="1196" y="340">EXTERNAL</text>
+        <text x="1196" y="362" class="title">Webhook endpoints</text>
+        <text x="1196" y="378" class="body">sandbox events</text>
+      </g>
+
+      <!-- expose branch -->
+      <g class="node data">
+        <rect x="1392" y="320" width="150" height="66" rx="10"/>
+        <text class="tag" x="1406" y="340">EXPOSE</text>
+        <text x="1406" y="362" class="title">Service / Ingress</text>
+        <text x="1406" y="378" class="body">created by API</text>
+      </g>
+
+      <!-- control edges -->
+      <path class="edge control" marker-end="url(#arrow-c)" d="M 216 188 H 256"/>
+      <path class="edge control" marker-end="url(#arrow-c)" d="M 396 188 H 436"/>
+      <path class="edge control" marker-end="url(#arrow-c)" d="M 686 188 H 746"/>
+      <path class="edge control" marker-end="url(#arrow-c)" d="M 946 192 H 986"/>
+      <path class="edge control" marker-end="url(#arrow-c)" d="M 1192 192 H 1232"/>
+
+      <path class="edge dashed control" marker-end="url(#arrow-c)" d="M 526 244 V 320"/>
+      <path class="edge control" marker-end="url(#arrow-c)" d="M 660 244 V 320"/>
+      <path class="edge dashed control" marker-end="url(#arrow-c)" d="M 734 320 V 244"/>
+      <text class="edge-label" x="742" y="288">suspend</text>
+
+      <path class="edge async" marker-end="url(#arrow-a)" d="M 686 288 V 300 H 912 V 320"/>
+      <path class="edge async" marker-end="url(#arrow-a)" d="M 972 353 H 1002"/>
+      <path class="edge async" marker-end="url(#arrow-a)" d="M 1152 353 H 1182"/>
+
+      <path class="edge data" marker-end="url(#arrow-d)" d="M 1440 320 V 244"/>
+      <text class="edge-label" x="1450" y="292">expose</text>
+
+      <!-- data plane band -->
+      <rect class="band data" x="32" y="530" width="1536" height="330" rx="18"/>
+      <text class="band-label" x="56" y="558">DATA PLANE</text>
+      <text class="note" x="56" y="576">envd 是唯一入口：进程、文件、终端都经由它进入沙箱</text>
+
+      <rect class="zone" x="646" y="600" width="700" height="276" rx="14"/>
+      <text class="zone-label" x="666" y="622">KUBERNETES · SANDBOX POD</text>
+
+      <g class="node data">
+        <rect x="56" y="676" width="160" height="76" rx="10"/>
+        <text class="tag" x="70" y="696">CLIENTS</text>
+        <text x="70" y="718" class="title">SDK · terminal</text>
+        <text x="70" y="736" class="body">Dashboard</text>
+      </g>
+      <g class="node data">
+        <rect x="256" y="676" width="140" height="76" rx="10"/>
+        <text class="tag" x="270" y="696">EDGE</text>
+        <text x="270" y="718" class="title">Ingress</text>
+        <text x="270" y="736" class="body">envd route</text>
+      </g>
+      <g class="node data">
+        <rect x="436" y="660" width="200" height="108" rx="10"/>
+        <text class="tag" x="452" y="682">ORCHESTRATOR</text>
+        <text x="452" y="704" class="title">envd proxy</text>
+        <text x="452" y="722" class="body">auth · streaming</text>
+        <text x="452" y="740" class="body">Pod IP cache 5s</text>
+        <text x="452" y="758" class="body">ConnectRPC / REST</text>
+      </g>
+      <g class="node data">
+        <rect x="676" y="652" width="220" height="124" rx="10"/>
+        <text class="tag" x="692" y="674">SANDBOX</text>
+        <text x="692" y="696" class="title">Sandbox Pod</text>
+        <text x="692" y="714" class="body">Kata VM · main</text>
+        <text x="692" y="732" class="body">envd :49983</text>
+        <text x="692" y="750" class="body">postStart 启动</text>
+      </g>
+
+      <g class="node data">
+        <rect x="936" y="612" width="160" height="58" rx="10"/>
+        <text class="tag" x="950" y="632">PROCESS</text>
+        <text x="950" y="652" class="title">exec / process</text>
+      </g>
+      <g class="node data">
+        <rect x="936" y="684" width="160" height="58" rx="10"/>
+        <text class="tag" x="950" y="704">FILES</text>
+        <text x="950" y="724" class="title">files / workspace</text>
+      </g>
+      <g class="node data">
+        <rect x="936" y="756" width="160" height="58" rx="10"/>
+        <text class="tag" x="950" y="776">TERMINAL</text>
+        <text x="950" y="796" class="title">PTY / ACP</text>
+      </g>
+
+      <g class="node store">
+        <rect x="1136" y="684" width="170" height="58" rx="10"/>
+        <text class="tag" x="1150" y="704">STORAGE</text>
+        <text x="1150" y="724" class="title">workspace PVC</text>
+        <text x="1150" y="740" class="body">per sandbox</text>
+      </g>
+
+      <!-- data edges -->
+      <path class="edge data" marker-end="url(#arrow-d)" d="M 216 714 H 256"/>
+      <path class="edge data" marker-end="url(#arrow-d)" d="M 396 714 H 436"/>
+      <path class="edge data" marker-end="url(#arrow-d)" d="M 636 714 H 676"/>
+      <path class="edge data" marker-end="url(#arrow-d)" d="M 896 694 V 641 H 936"/>
+      <path class="edge data" marker-end="url(#arrow-d)" d="M 896 714 H 936"/>
+      <path class="edge data" marker-end="url(#arrow-d)" d="M 896 734 V 785 H 936"/>
+      <path class="edge data" marker-end="url(#arrow-d)" d="M 1096 713 H 1136"/>
+
+      <text class="note" x="1136" y="772">暂停 / TTL 到期只删 Pod；PVC 保留，resume 重新挂载</text>
+      <text class="note" x="56" y="836">请求路径：Client → Ingress → envd proxy → PodIP:49983 → envd → process / files / PTY</text>
+    </svg>
   </div>
 
-  <div class="scroll">
-    <div class="diagram" id="diagram" data-mode="all">
-      <svg id="edges" viewBox="0 0 1800 1080" aria-hidden="true">
-        <defs>
-          <marker id="arrow-control" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
-            <path d="M0,0 L8,4 L0,8 z" fill="#7c3aed"/>
-          </marker>
-          <marker id="arrow-data" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
-            <path d="M0,0 L8,4 L0,8 z" fill="#0f9f7a"/>
-          </marker>
-          <marker id="arrow-k8s" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
-            <path d="M0,0 L8,4 L0,8 z" fill="#2563eb"/>
-          </marker>
-          <marker id="arrow-muted" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
-            <path d="M0,0 L8,4 L0,8 z" fill="#64748b"/>
-          </marker>
-          <marker id="arrow-control-start" markerWidth="8" markerHeight="8" refX="1" refY="4" orient="auto" markerUnits="strokeWidth">
-            <path d="M8,0 L0,4 L8,8 z" fill="#7c3aed"/>
-          </marker>
-          <marker id="arrow-data-start" markerWidth="8" markerHeight="8" refX="1" refY="4" orient="auto" markerUnits="strokeWidth">
-            <path d="M8,0 L0,4 L8,8 z" fill="#0f9f7a"/>
-          </marker>
-        </defs>
-      </svg>
-
-      <section class="lane control-lane control-only">
-        <div class="lane-title">控制面 <span class="lane-kicker">管理 Sandbox 期望状态</span></div>
-
-        <div class="node-group clients-panel control-only">
-          <div class="group-title">管理入口</div>
-          <div class="node control card-dashboard" id="ctrl-dashboard">
-            <strong>Dashboard</strong>
-            <small>模板 · 池 · Sandbox 管理页面</small>
-            <span class="tag">CONTROL</span>
-          </div>
-          <div class="node control card-rest" id="ctrl-rest">
-            <strong>REST Client</strong>
-            <small>直接调用管理 API</small>
-            <span class="tag">CONTROL</span>
-          </div>
-          <div class="node control card-sdk" id="ctrl-sdk">
-            <strong>E2B SDK</strong>
-            <small>create · connect · pause · kill</small>
-            <span class="tag">LIFECYCLE</span>
-          </div>
-        </div>
-
-        <div class="node control" id="ctrl-auth">
-          <strong>Control Auth</strong>
-          <small>Bearer Token<br>E2B X-API-Key</small>
-        </div>
-
-        <div class="node control" id="native-api">
-          <strong>Native REST API</strong>
-          <small><code>/api/v1</code><br>Sandbox · Template · Pool</small>
-        </div>
-
-        <div class="node control" id="e2b-api">
-          <strong>E2B Control API</strong>
-          <small><code>/e2b</code><br>lifecycle facade</small>
-        </div>
-
-        <div class="node-group" id="services-group">
-          <div class="group-title">Orchestrator Services</div>
-          <div class="node control service-card" id="svc-template"><strong>Template</strong><small>模板定义</small></div>
-          <div class="node control service-card" id="svc-sandbox"><strong>Sandbox</strong><small>Claim 生命周期 · TTL 扫描</small></div>
-          <div class="node control service-card" id="svc-pool"><strong>Pool</strong><small>声明与领取</small></div>
-          <div class="node control service-card" id="svc-e2b"><strong>E2B Service</strong><small>控制面适配</small></div>
-          <div class="node control service-card" id="svc-expose"><strong>Expose</strong><small>Service · Ingress</small></div>
-          <div class="node control service-card" id="svc-webhook"><strong>Webhook</strong><small>事件与投递</small></div>
-        </div>
-
-        <div class="node state" id="configmaps">
-          <strong>ConfigMaps</strong>
-          <small>templates · webhooks</small>
-        </div>
-        <div class="node state" id="redis">
-          <strong>Redis</strong>
-          <small>Celery · webhooks</small>
-        </div>
-        <div class="node k8s" id="controllers">
-          <strong>Sandbox Controller</strong>
-          <small>SandboxClaim · SandboxTemplate · WarmPool<br>upstream agent-sandbox controllers</small>
-        </div>
-        <div class="node control" id="workers">
-          <strong>Webhook Worker</strong>
-          <small>Celery · webhook delivery</small>
-        </div>
-        <div class="node k8s" id="ctrl-k8s-api">
-          <strong>Kubernetes API</strong>
-          <small>create · patch · delete</small>
-        </div>
-        <div class="node-group" id="resources-group">
-          <div class="group-title">Sandbox Resources</div>
-          <div class="node k8s resource-card" id="res-deploy"><strong>SandboxClaim / Sandbox</strong><small>Template · WarmPool · warm supply</small></div>
-          <div class="node k8s resource-card" id="res-service"><strong>Service</strong><small>runtime routing</small></div>
-          <div class="node k8s resource-card" id="res-pvc"><strong>Workspace PVC</strong><small>persistent data</small></div>
-          <div class="node k8s resource-card" id="res-pod"><strong>Kata Pod / VM</strong><small>isolated workload</small></div>
-          <div class="node k8s resource-card" id="res-runtime"><strong>Ingress · RuntimeClass · NetworkPolicy</strong><small>exposure and isolation</small></div>
-        </div>
-        <div class="node external" id="webhook-target">
-          <strong>Webhook Receiver</strong>
-          <small>external endpoint</small>
-        </div>
-      </section>
-
-      <section class="lane data-lane data-only">
-        <div class="lane-title">数据面 <span class="lane-kicker">在已就绪 Sandbox 内执行操作</span></div>
-
-        <div class="node-group clients-panel" id="data-clients" style="top:66px;height:292px">
-          <div class="group-title">运行时入口</div>
-          <div class="node data card-dashboard" id="data-dashboard">
-            <strong>Dashboard</strong>
-            <small>终端 · 文件视图</small>
-            <span class="tag data">RUNTIME UI</span>
-          </div>
-          <div class="node data card-sdk" id="data-sdk" style="top:158px;height:106px">
-            <strong>E2B SDK</strong>
-            <small>exec · files · PTY</small>
-            <span class="tag data">RUNTIME</span>
-          </div>
-        </div>
-
-        <div class="node data" id="data-auth">
-          <strong>Auth + Routing</strong>
-          <small>Bearer / X-API-Key<br>path or wildcard host</small>
-        </div>
-        <div class="node data" id="envd-proxy">
-          <strong>envd proxy</strong>
-          <small>resolve ready Pod<br>cache · retry<br>stream request / response</small>
-        </div>
-        <div class="node k8s" id="pod-lookup">
-          <strong>Kubernetes API</strong>
-          <small>ready Pod lookup</small>
-        </div>
-
-        <div class="node-group" id="data-sandbox">
-          <div class="group-title">Kata Sandbox · main container</div>
-          <div class="node data" id="main-container">
-            <strong>Main Container</strong>
-            <small>workload process</small>
-          </div>
-          <div class="node data" id="envd">
-            <strong>envd</strong>
-            <small>:49983 data-plane agent</small>
-          </div>
-          <div class="node data" id="files-api">
-            <strong>Filesystem API</strong>
-            <small>/files · ConnectRPC</small>
-          </div>
-          <div class="node data" id="process-api">
-            <strong>Process API</strong>
-            <small>start · input · signal</small>
-          </div>
-          <div class="node data" id="pty-api">
-            <strong>PTY</strong>
-            <small>terminal output stream</small>
-          </div>
-          <div class="node state" id="workspace-pvc">
-            <strong>Mounted /workspace</strong>
-            <small>from Workspace PVC</small>
-          </div>
-          <div class="sandbox-badge" id="runtime-class">Kata RuntimeClass</div>
-          <div class="sandbox-badge" id="network-policy">NetworkPolicy optional</div>
-        </div>
-      </section>
+  <div class="foot">
+    <div class="card">
+      <h3>控制面</h3>
+      <p>API 只写期望状态：模板和 Webhook 放 ConfigMap，沙箱写 <code>SandboxTemplate</code>、<code>SandboxWarmPool</code>、<code>SandboxClaim</code>。上游控制器负责 Pod、PVC 和预热池。</p>
+    </div>
+    <div class="card">
+      <h3>数据面</h3>
+      <p>所有交互都经 envd：<code>process</code> 执行命令，<code>files</code> 读写 workspace，<code>PTY/ACP</code> 提供终端。代理只做鉴权、Pod IP 解析和流式转发。</p>
+    </div>
+    <div class="card">
+      <h3>暂停与 TTL</h3>
+      <p>TTL 由 API 内的扫描任务处理；到期把沙箱设为 <code>operatingMode=Suspended</code>：删除 Pod、保留 PVC。resume 重建 Pod 并挂回同一 PVC。</p>
     </div>
   </div>
-
-  <p class="footnote">
-    说明：E2B SDK 同时参与两个平面。生命周期方法进入 <code>/e2b</code> 控制链，运行时方法进入 envd 数据链。
-    Dashboard 的管理页面走控制面，终端与文件视图走数据面。
-  </p>
 </div>
-
-<script>
-  const diagram = document.getElementById('diagram');
-  const svg = document.getElementById('edges');
-  const NS = 'http://www.w3.org/2000/svg';
-
-  function centerInDiagram(el) {
-    const dr = diagram.getBoundingClientRect();
-    const r = el.getBoundingClientRect();
-    return {
-      left: r.left - dr.left,
-      right: r.right - dr.left,
-      top: r.top - dr.top,
-      bottom: r.bottom - dr.top,
-      cx: (r.left + r.right) / 2 - dr.left,
-      cy: (r.top + r.bottom) / 2 - dr.top
-    };
-  }
-
-  function endpoint(id, side) {
-    const r = centerInDiagram(document.getElementById(id));
-    if (side === 'left') return { x: r.left, y: r.cy };
-    if (side === 'right') return { x: r.right, y: r.cy };
-    if (side === 'top') return { x: r.cx, y: r.top };
-    return { x: r.cx, y: r.bottom };
-  }
-
-  function addText(x, y, text, cls) {
-    const t = document.createElementNS(NS, 'text');
-    t.setAttribute('x', x);
-    t.setAttribute('y', y);
-    t.setAttribute('text-anchor', 'middle');
-    t.setAttribute('class', cls);
-    t.textContent = text;
-    svg.appendChild(t);
-  }
-
-  function drawEdge(spec) {
-    const source = endpoint(spec.from, spec.fromSide);
-    const target = endpoint(spec.to, spec.toSide);
-    let d;
-    if (spec.fromSide === 'right' && spec.toSide === 'left') {
-      const dx = Math.max(40, (target.x - source.x) * 0.46);
-      d = `M ${source.x} ${source.y} C ${source.x + dx} ${source.y}, ${target.x - dx} ${target.y}, ${target.x} ${target.y}`;
-    } else if (spec.fromSide === 'bottom' && spec.toSide === 'top') {
-      const dy = Math.max(34, (target.y - source.y) * 0.42);
-      d = `M ${source.x} ${source.y} C ${source.x} ${source.y + dy}, ${target.x} ${target.y - dy}, ${target.x} ${target.y}`;
-    } else {
-      const dx = Math.max(38, (target.x - source.x) * 0.42);
-      const dy = Math.max(30, (target.y - source.y) * 0.42);
-      d = `M ${source.x} ${source.y} C ${source.x + dx} ${source.y + dy}, ${target.x - dx} ${target.y - dy}, ${target.x} ${target.y}`;
-    }
-
-    const path = document.createElementNS(NS, 'path');
-    path.setAttribute('d', d);
-    path.setAttribute('class', `edge ${spec.className || 'edge-control'} ${spec.dashed ? 'edge-muted' : ''}`);
-    if (spec.twoWay) path.setAttribute('marker-start', `url(#${spec.startMarker || 'arrow-control-start'})`);
-    path.setAttribute('marker-end', `url(#${spec.marker || 'arrow-control'})`);
-    svg.appendChild(path);
-
-    if (spec.label) {
-      const x = (source.x + target.x) / 2;
-      const y = (source.y + target.y) / 2 - 7;
-      addText(x, y, spec.label, 'edge-label');
-    }
-  }
-
-  const edges = [
-    { from: 'ctrl-dashboard', to: 'ctrl-auth', fromSide: 'right', toSide: 'left', twoWay: true },
-    { from: 'ctrl-rest', to: 'ctrl-auth', fromSide: 'right', toSide: 'left', twoWay: true },
-    { from: 'ctrl-sdk', to: 'ctrl-auth', fromSide: 'right', toSide: 'left', twoWay: true },
-    { from: 'ctrl-auth', to: 'native-api', fromSide: 'right', toSide: 'left' },
-    { from: 'ctrl-auth', to: 'e2b-api', fromSide: 'right', toSide: 'left' },
-    { from: 'native-api', to: 'services-group', fromSide: 'right', toSide: 'left', label: 'route' },
-    { from: 'e2b-api', to: 'services-group', fromSide: 'right', toSide: 'left' },
-    { from: 'services-group', to: 'configmaps', fromSide: 'bottom', toSide: 'top', label: 'metadata' },
-    { from: 'services-group', to: 'redis', fromSide: 'bottom', toSide: 'top', label: 'queue' },
-    { from: 'services-group', to: 'workers', fromSide: 'bottom', toSide: 'top', label: 'webhook tasks' },
-    { from: 'services-group', to: 'ctrl-k8s-api', fromSide: 'top', toSide: 'left', label: 'desired state' },
-    { from: 'ctrl-k8s-api', to: 'controllers', fromSide: 'bottom', toSide: 'top', label: 'watch', dashed: true, className: 'edge-k8s', marker: 'arrow-k8s' },
-    { from: 'controllers', to: 'resources-group', fromSide: 'right', toSide: 'left', label: 'reconcile', dashed: true, className: 'edge-k8s', marker: 'arrow-k8s' },
-    { from: 'workers', to: 'webhook-target', fromSide: 'right', toSide: 'left', label: 'deliver', dashed: true, className: 'edge-muted', marker: 'arrow-muted' },
-    { from: 'ctrl-k8s-api', to: 'resources-group', fromSide: 'right', toSide: 'left', label: 'Sandbox / Pool CRs', className: 'edge-k8s', marker: 'arrow-k8s' },
-    { from: 'data-dashboard', to: 'data-auth', fromSide: 'right', toSide: 'left', className: 'edge-data', marker: 'arrow-data', startMarker: 'arrow-data-start', twoWay: true },
-    { from: 'data-sdk', to: 'data-auth', fromSide: 'right', toSide: 'left', className: 'edge-data', marker: 'arrow-data', startMarker: 'arrow-data-start', twoWay: true },
-    { from: 'data-auth', to: 'envd-proxy', fromSide: 'right', toSide: 'left', className: 'edge-data', marker: 'arrow-data' },
-    { from: 'envd-proxy', to: 'pod-lookup', fromSide: 'bottom', toSide: 'top', label: 'resolve / refresh', dashed: true, className: 'edge-k8s', marker: 'arrow-k8s' },
-    { from: 'envd-proxy', to: 'envd', fromSide: 'right', toSide: 'left', label: 'stream', className: 'edge-data', marker: 'arrow-data', startMarker: 'arrow-data-start', twoWay: true },
-    { from: 'main-container', to: 'envd', fromSide: 'right', toSide: 'left', className: 'edge-data', marker: 'arrow-data' },
-    { from: 'envd', to: 'files-api', fromSide: 'right', toSide: 'left', className: 'edge-data', marker: 'arrow-data' },
-    { from: 'envd', to: 'process-api', fromSide: 'right', toSide: 'left', className: 'edge-data', marker: 'arrow-data' },
-    { from: 'envd', to: 'pty-api', fromSide: 'right', toSide: 'left', className: 'edge-data', marker: 'arrow-data' },
-    { from: 'files-api', to: 'workspace-pvc', fromSide: 'right', toSide: 'left', className: 'edge-data', marker: 'arrow-data', startMarker: 'arrow-data-start', twoWay: true }
-  ];
-
-  function draw() {
-    svg.querySelectorAll('path.edge, text.edge-label').forEach(el => el.remove());
-    edges.forEach(drawEdge);
-  }
-
-  document.querySelectorAll('[data-mode]').forEach(button => {
-    button.addEventListener('click', () => {
-      document.querySelectorAll('[data-mode]').forEach(b => b.classList.remove('active'));
-      button.classList.add('active');
-      diagram.dataset.mode = button.dataset.mode;
-    });
-  });
-
-  window.addEventListener('load', draw);
-  window.addEventListener('resize', draw);
-</script>
 </body>
 </html>
